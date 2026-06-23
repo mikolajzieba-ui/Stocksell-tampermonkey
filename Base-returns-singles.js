@@ -7,8 +7,8 @@
 // @connect      script.google.com
 // @connect      script.googleusercontent.com
 // @connect      localhost
-// @downloadURL  https://raw.githubusercontent.com/TWOJ_LOGIN/stocksell-scripts/main/Base-returns-singles.js
-// @updateURL    https://raw.githubusercontent.com/TWOJ_LOGIN/stocksell-scripts/main/Base-returns-singles.js
+// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/stocksell-scripts/main/Base-returns-singles.js
+// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/stocksell-scripts/main/Base-returns-singles.js
 // ==/UserScript==
 
 (function () {
