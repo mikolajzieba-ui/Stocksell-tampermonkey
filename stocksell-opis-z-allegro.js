@@ -8,8 +8,8 @@
 // @grant        GM_xmlhttpRequest
 // @connect      allegro.pl
 //
-// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/stocksell-opis-z-allegro.js
-// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/stocksell-opis-z-allegro.js
+// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/stocksell-opis-z-allegro.user.js
+// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/stocksell-opis-z-allegro.user.js
 //
 // ==/UserScript==
 (function() {
