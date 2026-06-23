@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pobieranie opisu z Allegro dla StockSell
 // @namespace    http://tampermonkey.net/
-// @version      10.2
+// @version      10.3
 // @description  Czysty Opis + Wady
 // @match        *://*.stocksell.io/*
 // @match        *://stocksell.io/*
