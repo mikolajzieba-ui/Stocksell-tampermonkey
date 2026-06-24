@@ -5,6 +5,8 @@
 // @description  Wysyła każdy zeskanowany kod do Google Sheets
 // @match        https://panel.baselinker.com/orders_returns*
 // @grant        none
+// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/stocksell-scripts/main/Scan-to-sheet-for-singles.user.js
+// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/stocksell-scripts/main/Scan-to-sheet-for-singles.user.js
 // ==/UserScript==
 
 (function () {
