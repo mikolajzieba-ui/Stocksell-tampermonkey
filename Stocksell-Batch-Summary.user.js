@@ -6,6 +6,8 @@
 // @match        https://stocksell.io/*
 // @match        https://*.stocksell.io/*
 // @run-at       document-idle
+// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/stocksell-scripts/main/Stocksell-Batch-Summary.user.js
+// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/stocksell-scripts/main/Stocksell-Batch-Summary.user.js
 // ==/UserScript==
 (function() {
     'use strict';
