@@ -6,6 +6,8 @@
 // @author       Twój Nick
 // @match        *://*.stocksell.io/*
 // @grant        none
+// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/stocksell-scripts/main/Scan-to-sheet-for-singles.user.js
+// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/stocksell-scripts/main/Scan-to-sheet-for-singles.user.js
 // ==/UserScript==
 
 (function() {
