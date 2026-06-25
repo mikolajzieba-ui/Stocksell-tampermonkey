@@ -13,7 +13,7 @@
 (function() {
     'use strict';
 
-    // 1. Główny kontener (wrapper) dla całego narzędzia
+    // 1. Główny kontener (wrapper)
     const wrapper = document.createElement('div');
     wrapper.style.cssText = `
         position: fixed;
@@ -21,7 +21,7 @@
         right: 20px;
         z-index: 999999;
         font-family: sans-serif;
-        display: none; /* Domyślnie ukryte, pokazane tylko na odpowiedniej podstronie */
+        display: none;
     `;
 
     // 2. Przycisk rozwijania/zwijania (Toggle)
@@ -39,7 +39,7 @@
         transition: background 0.3s;
     `;
 
-    // 3. Właściwy panel (domyślnie ukryty)
+    // 3. Właściwy panel
     const panel = document.createElement('div');
     panel.style.cssText = `
         display: none;
@@ -98,16 +98,15 @@
     resultArea.readOnly = true;
     resultArea.placeholder = 'Wynik pojawi się tutaj...';
 
-    // Składanie elementów interfejsu
     panel.appendChild(input);
     panel.appendChild(actionBtn);
     panel.appendChild(resultArea);
-    
+
     wrapper.appendChild(panel);
     wrapper.appendChild(toggleBtn);
     document.body.appendChild(wrapper);
 
-    // 4. Logika zwijania/rozwijania panelu
+    // 4. Logika zwijania/rozwijania
     let isPanelOpen = false;
     toggleBtn.addEventListener('click', () => {
         isPanelOpen = !isPanelOpen;
@@ -122,7 +121,7 @@
         }
     });
 
-    // 5. Sprawdzanie URL co sekundę (wsparcie dla nawigacji bez przeładowania strony)
+    // 5. Sprawdzanie URL co sekundę
     setInterval(() => {
         if (window.location.href.includes('/history/logs')) {
             wrapper.style.display = 'flex';
@@ -130,7 +129,6 @@
             wrapper.style.alignItems = 'flex-end';
         } else {
             wrapper.style.display = 'none';
-            // Automatyczne zamykanie panelu przy opuszczeniu podstrony
             isPanelOpen = false;
             panel.style.display = 'none';
             toggleBtn.innerText = 'Pokaż panel segmentów';
@@ -138,13 +136,12 @@
         }
     }, 1000);
 
-    // Pomocnicza funkcja do wyciągania strefy
     function getZone(segment) {
         if (!segment) return '';
         return segment.includes('/') ? segment.split('/')[0].trim() : segment;
     }
 
-    // 6. Logika wyszukiwania i parsowania
+    // 6. Logika wyszukiwania
     actionBtn.addEventListener('click', () => {
         const targetCode = input.value.trim();
         if (!targetCode) {
@@ -187,10 +184,10 @@
         for (let i = targetIndex - 1; i >= 0; i--) {
             const seg = rowData[i].baseSegment;
             if (!seg) continue;
-            
+
             const currentZone = getZone(seg);
-            if (currentZone !== targetZone) break; 
-            
+            if (currentZone !== targetZone) break;
+
             if (seg !== targetSegment && !collectedBefore.includes(seg)) {
                 collectedBefore.push(seg);
             }
@@ -200,10 +197,10 @@
         for (let i = targetIndex + 1; i < rowData.length; i++) {
             const seg = rowData[i].baseSegment;
             if (!seg) continue;
-            
+
             const currentZone = getZone(seg);
             if (currentZone !== targetZone) break;
-            
+
             if (seg !== targetSegment && !collectedAfter.includes(seg)) {
                 collectedAfter.push(seg);
             }
@@ -211,13 +208,13 @@
 
         let availableBefore = collectedBefore.length;
         let availableAfter = collectedAfter.length;
-        
+
         let takeBefore = Math.min(availableBefore, 10);
         let takeAfter = Math.min(availableAfter, 10);
-        
+
         let remainingBeforeQuota = 10 - takeBefore;
         let remainingAfterQuota = 10 - takeAfter;
-        
+
         if (remainingBeforeQuota > 0) {
             takeAfter = Math.min(availableAfter, takeAfter + remainingBeforeQuota);
         } else if (remainingAfterQuota > 0) {
@@ -227,10 +224,25 @@
         const finalBefore = collectedBefore.slice(0, takeBefore).reverse();
         const finalAfter = collectedAfter.slice(0, takeAfter);
 
-        const finalResult = [...finalBefore, targetSegment, ...finalAfter].join(', ');
-        
+        // Składanie pełnej listy segmentów do jednej tablicy
+        const allSegments = [...finalBefore, targetSegment, ...finalAfter];
+
+        let finalResult = '';
+        if (allSegments.length > 0) {
+            // Pierwszy element zostaje pełny (np. "P2 / A1A1")
+            const firstSegment = allSegments[0];
+
+            // Z kolejnych elementów usuwamy strefę (np. "P2 / A1A2" staje się "A1A2")
+            const restSegments = allSegments.slice(1).map(seg => {
+                return seg.includes('/') ? seg.split('/')[1].trim() : seg;
+            });
+
+            // Łączenie wszystkiego przecinkiem
+            finalResult = [firstSegment, ...restSegments].join(', ');
+        }
+
         resultArea.value = finalResult;
-        
+
         if (navigator.clipboard && window.isSecureContext) {
             navigator.clipboard.writeText(finalResult).then(() => {
                 showSuccessState();
@@ -240,13 +252,13 @@
             document.execCommand('copy');
             showSuccessState();
         }
-        
+
         function showSuccessState() {
             const originalText = actionBtn.innerText;
             const originalBg = actionBtn.style.background;
             actionBtn.innerText = 'Skopiowano do schowka!';
             actionBtn.style.background = '#28a745';
-            setTimeout(() => { 
+            setTimeout(() => {
                 actionBtn.innerText = originalText;
                 actionBtn.style.background = originalBg;
             }, 2000);
