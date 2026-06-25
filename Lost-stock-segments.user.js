@@ -55,7 +55,7 @@
 
     const input = document.createElement('input');
     input.type = 'text';
-    input.placeholder = 'Kod produktu';
+    input.placeholder = 'Kod produktu (np. 857621211)';
     input.style.cssText = `
         width: 100%;
         padding: 8px;
@@ -102,7 +102,7 @@
     panel.appendChild(input);
     panel.appendChild(actionBtn);
     panel.appendChild(resultArea);
-
+    
     wrapper.appendChild(panel);
     wrapper.appendChild(toggleBtn);
     document.body.appendChild(wrapper);
@@ -187,10 +187,10 @@
         for (let i = targetIndex - 1; i >= 0; i--) {
             const seg = rowData[i].baseSegment;
             if (!seg) continue;
-
+            
             const currentZone = getZone(seg);
-            if (currentZone !== targetZone) break;
-
+            if (currentZone !== targetZone) break; 
+            
             if (seg !== targetSegment && !collectedBefore.includes(seg)) {
                 collectedBefore.push(seg);
             }
@@ -200,10 +200,10 @@
         for (let i = targetIndex + 1; i < rowData.length; i++) {
             const seg = rowData[i].baseSegment;
             if (!seg) continue;
-
+            
             const currentZone = getZone(seg);
             if (currentZone !== targetZone) break;
-
+            
             if (seg !== targetSegment && !collectedAfter.includes(seg)) {
                 collectedAfter.push(seg);
             }
@@ -211,13 +211,13 @@
 
         let availableBefore = collectedBefore.length;
         let availableAfter = collectedAfter.length;
-
+        
         let takeBefore = Math.min(availableBefore, 10);
         let takeAfter = Math.min(availableAfter, 10);
-
+        
         let remainingBeforeQuota = 10 - takeBefore;
         let remainingAfterQuota = 10 - takeAfter;
-
+        
         if (remainingBeforeQuota > 0) {
             takeAfter = Math.min(availableAfter, takeAfter + remainingBeforeQuota);
         } else if (remainingAfterQuota > 0) {
@@ -228,9 +228,9 @@
         const finalAfter = collectedAfter.slice(0, takeAfter);
 
         const finalResult = [...finalBefore, targetSegment, ...finalAfter].join(', ');
-
+        
         resultArea.value = finalResult;
-
+        
         if (navigator.clipboard && window.isSecureContext) {
             navigator.clipboard.writeText(finalResult).then(() => {
                 showSuccessState();
@@ -240,13 +240,13 @@
             document.execCommand('copy');
             showSuccessState();
         }
-
+        
         function showSuccessState() {
             const originalText = actionBtn.innerText;
             const originalBg = actionBtn.style.background;
             actionBtn.innerText = 'Skopiowano do schowka!';
             actionBtn.style.background = '#28a745';
-            setTimeout(() => {
+            setTimeout(() => { 
                 actionBtn.innerText = originalText;
                 actionBtn.style.background = originalBg;
             }, 2000);
