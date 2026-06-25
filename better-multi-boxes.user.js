@@ -5,6 +5,8 @@
 // @description  Dynamiczne dopasowanie wielkości tekstu do ilości boxów
 // @match        https://stocksell.io/*
 // @grant        none
+// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/better-multi-boxes.user.js
+// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/better-multi-boxes.user.js
 // ==/UserScript==
 
 (function () {
