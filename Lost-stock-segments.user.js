@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StockSell - Zgubione przy stockowaniu - spisywanie segmentów
 // @namespace    http://tampermonkey.net/
-// @version      1.3
+// @version      1.4
 // @description  Pobiera segmenty, działa tylko na /history/logs, domyślnie ukryty pod przyciskiem.
 // @author       Twój Nick
 // @match        *://*.stocksell.io/*
