@@ -6,8 +6,8 @@
 // @author       Twój Nick
 // @match        *://*.stocksell.io/*
 // @grant        none
-// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/stocksell-scripts/main/Lost-stock-segments.user.js
-// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/stocksell-scripts/main/Lost-stock-segments.user.js
+// @downloadURL https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Lost-stock-segments.user.js
+// @updateURL   https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Lost-stock-segments.user.js
 // ==/UserScript==
 
 (function() {
