@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         StockSell - Zgubione przy stockowaniu - spisywanie segmentów
 // @namespace    http://tampermonkey.net/
-// @version      1.4
-// @description  Pobiera segmenty, działa tylko na /history/logs, domyślnie ukryty pod przyciskiem.
+// @version      1.5
+// @description  Pobiera segmenty, działa tylko na /history/logs, domyślnie ukryty pod przyciskiem + Opcja drukowania lokacji.
 // @author       Twój Nick
 // @match        *://*.stocksell.io/*
 // @grant        none
@@ -12,6 +12,10 @@
 
 (function() {
     'use strict';
+
+    // =========================================================================
+    // 1. CZĘŚĆ ORYGINALNA (Nienaruszona)
+    // =========================================================================
 
     // 1. Główny kontener (wrapper)
     const wrapper = document.createElement('div');
@@ -23,7 +27,6 @@
         font-family: sans-serif;
         display: none;
     `;
-
     // 2. Przycisk rozwijania/zwijania (Toggle)
     const toggleBtn = document.createElement('button');
     toggleBtn.innerText = 'Pokaż panel segmentów';
@@ -38,7 +41,6 @@
         box-shadow: 0 4px 8px rgba(0,0,0,0.3);
         transition: background 0.3s;
     `;
-
     // 3. Właściwy panel
     const panel = document.createElement('div');
     panel.style.cssText = `
@@ -52,7 +54,6 @@
         width: 320px;
         margin-bottom: 10px;
     `;
-
     const input = document.createElement('input');
     input.type = 'text';
     input.placeholder = 'Kod produktu (np. 857621211)';
@@ -66,7 +67,6 @@
         color: #fff;
         box-sizing: border-box;
     `;
-
     const actionBtn = document.createElement('button');
     actionBtn.innerText = 'Szukaj i skopiuj segmenty';
     actionBtn.style.cssText = `
@@ -81,7 +81,6 @@
         margin-bottom: 10px;
         transition: background 0.3s;
     `;
-
     const resultArea = document.createElement('textarea');
     resultArea.style.cssText = `
         width: 100%;
@@ -94,7 +93,7 @@
         box-sizing: border-box;
         resize: none;
         font-family: monospace;
-    `;
+    `;    
     resultArea.readOnly = true;
     resultArea.placeholder = 'Wynik pojawi się tutaj...';
 
@@ -264,4 +263,105 @@
             }, 2000);
         }
     });
+
+    // =========================================================================
+    // 2. NOWA CZĘŚĆ: DRUKOWANIE LISTY LOKACJI NA ZEBRZE
+    // =========================================================================
+
+    // Funkcja tworząca ukrytą ramkę i wysyłająca dane do druku
+    function printLocationsToZebra(locations) {
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        document.body.appendChild(iframe);
+
+        const doc = iframe.contentWindow.document;
+        doc.write('<html><head><title>Drukuj Lokacje</title><style>');
+        // Stylizacja przygotowana pod etykieciarkę (wyraźny, duży font bezszeryfowy)
+        doc.write(`
+            body { 
+                font-family: Arial, sans-serif; 
+                margin: 0; 
+                padding: 10px; 
+                font-size: 20px; 
+                color: #000;
+            }
+            h3 { margin: 0 0 10px 0; font-size: 22px; text-transform: uppercase; border-bottom: 2px solid #000; padding-bottom: 5px; }
+            ul { list-style-type: none; padding: 0; margin: 0; }
+            li { margin-bottom: 8px; font-weight: bold; }
+        `);
+        doc.write('</style></head><body>');
+        doc.write('<h3>Lista Lokacji</h3><ul>');
+        locations.forEach(loc => {
+            doc.write('<li>' + loc + '</li>');
+        });
+        doc.write('</ul></body></html>');
+        doc.close();
+
+        // Focus i wywołanie drukowania po wyrenderowaniu
+        iframe.contentWindow.focus();
+        setTimeout(() => {
+            iframe.contentWindow.print();
+            // Sprzątanie po wydruku
+            setTimeout(() => {
+                document.body.removeChild(iframe);
+            }, 1000);
+        }, 200);
+    }
+
+    // Nasłuchiwanie na pojawienie się rozwijanego menu Material Design
+    setInterval(() => {
+        // Szukamy otwartych paneli menu z klasą .mat-menu-panel
+        const menuPanels = document.querySelectorAll('.mat-menu-panel');
+        
+        menuPanels.forEach(panel => {
+            // Sprawdzamy, czy menu zawiera elementy lokacji (.store-menu-item) 
+            // i czy nie dodaliśmy już do niego naszego przycisku
+            if (panel.querySelector('.store-menu-item') && !panel.querySelector('.print-zebra-btn')) {
+                
+                const printBtn = document.createElement('button');
+                printBtn.innerHTML = '🖨️ Drukuj listę (Zebra)';
+                printBtn.className = 'print-zebra-btn';
+                printBtn.style.cssText = `
+                    width: calc(100% - 16px);
+                    margin: 8px;
+                    padding: 8px;
+                    background: #2b2d30;
+                    color: #fff;
+                    border: 1px solid #555;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    font-weight: bold;
+                    transition: background 0.2s;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    gap: 8px;
+                `;
+                
+                // Efekt hover na przycisku
+                printBtn.onmouseover = () => printBtn.style.background = '#444';
+                printBtn.onmouseout = () => printBtn.style.background = '#2b2d30';
+
+                printBtn.addEventListener('click', (e) => {
+                    e.stopPropagation(); // Zapobiega natychmiastowemu zamknięciu menu po kliknięciu
+                    
+                    // Zbieramy teksty lokacji, pozbywając się tekstu ikon "content_copy" z Material Icons
+                    const items = Array.from(panel.querySelectorAll('.store-menu-item')).map(item => {
+                        let text = item.innerText || item.textContent;
+                        return text.replace(/content_copy/g, '').trim();
+                    }).filter(text => text !== '');
+
+                    if (items.length > 0) {
+                        printLocationsToZebra(items);
+                    }
+                });
+
+                // Dodajemy przycisk na samą górę zawartości menu
+                const menuContent = panel.querySelector('.mat-menu-content');
+                if (menuContent) {
+                    menuContent.insertBefore(printBtn, menuContent.firstChild);
+                }
+            }
+        });
+    }, 500); // Sprawdzamy co 0.5s czy menu się nie pojawiło
 })();
