@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Returns Scan To Sheet For Singles
 // @namespace    baselinker
-// @version      1.0
+// @version      1.1
 // @description  Wysyła każdy zeskanowany kod do Google Sheets
 // @match        https://panel.baselinker.com/orders_returns*
 // @grant        none
@@ -13,7 +13,7 @@
     'use strict';
 
     const WEBHOOK_URL =
-        "https://script.google.com/macros/s/AKfycbx_cmDoVVgCAcurmQL2HAe-RPk6VGNT5qbVgj7IpFu7KXznBCKZAZs3J3Se_ndLy68Mng/exec";
+        "https://script.google.com/macros/s/AKfycbz0PNaozDFbNegan5lZe8j3oAGZE7YW2sHPGXLZAGJ0Prx2htGugxqqf4tThUtGdvhLZQ/exec";
 
     let scanBuffer = '';
 
