@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         Returns Scan To Sheet For Singles
 // @namespace    baselinker
-// @version      1.1
+// @version      1.2
 // @description  Wysyła każdy zeskanowany kod do Google Sheets
 // @match        https://panel.baselinker.com/orders_returns*
 // @grant        none
-// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/stocksell-scripts/main/Scan-to-sheet-for-singles.user.js
-// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/stocksell-scripts/main/Scan-to-sheet-for-singles.user.js
+// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/Scan-to-sheet-for-singles.user.js
+// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/Scan-to-sheet-for-singles.user.js
 // ==/UserScript==
 
 (function () {
