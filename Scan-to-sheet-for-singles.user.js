@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Returns Scan To Sheet For Singles
 // @namespace    baselinker
-// @version      1.2
+// @version      1.3
 // @description  Wysyła każdy zeskanowany kod do Google Sheets
 // @match        https://panel.baselinker.com/orders_returns*
 // @grant        none
