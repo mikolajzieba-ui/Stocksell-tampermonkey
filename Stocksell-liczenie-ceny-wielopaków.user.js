@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StockSell - Przelicznik Wielopaków (SPA Autodetect)
 // @namespace    http://tampermonkey.net/
-// @version      1.2
+// @version      1.3
 // @description  Automatycznie pokazuje/ukrywa panel przelicznika przy zmianie podstron bez przeładowania strony.
 // @author       Twój Asystent AI
 // @match        https://stocksell.io/*
