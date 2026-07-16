@@ -5,7 +5,8 @@
 // @description  Automatycznie pokazuje/ukrywa panel przelicznika przy zmianie podstron bez przeładowania strony.
 // @author       Twój Asystent AI
 // @match        https://stocksell.io/*
-// @grant        none
+// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/Stocksell - liczenie ceny wielopaków.user.js
+// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/Stocksell - liczenie ceny wielopaków.user.js
 // ==/UserScript==
 
 (function() {
