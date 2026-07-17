@@ -1,20 +1,20 @@
 // ==UserScript==
 // @name         StockSell - Zgubione przy stockowaniu - spisywanie segmentów
 // @namespace    http://tampermonkey.net/
-// @version      1.6
-// @description  Pobiera segmenty, działa tylko na /history/logs, domyślnie ukryty pod przyciskiem + Opcja drukowania lokacji.
+// @version      1.7
+// @description  Pobiera segmenty, działa tylko na /history/logs, domyślnie ukryty pod przyciskiem + Opcja drukowania lokacji (tylko w /offers).
 // @author       Twój Nick
 // @match        *://*.stocksell.io/*
 // @grant        none
-// @downloadURL https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Lost-stock-segments.user.js
-// @updateURL   https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Lost-stock-segments.user.js
+// @downloadURL  https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Lost-stock-segments.user.js
+// @updateURL    https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Lost-stock-segments.user.js
 // ==/UserScript==
 
 (function() {
     'use strict';
 
     // =========================================================================
-    // 1. CZĘŚĆ ORYGINALNA (Nienaruszona)
+    // 1. CZĘŚĆ ORYGINALNA (Nienaruszona - działa na /history/logs)
     // =========================================================================
 
     // 1. Główny kontener (wrapper)
@@ -93,7 +93,7 @@
         box-sizing: border-box;
         resize: none;
         font-family: monospace;
-    `;    
+    `;  
     resultArea.readOnly = true;
     resultArea.placeholder = 'Wynik pojawi się tutaj...';
 
@@ -265,7 +265,7 @@
     });
 
     // =========================================================================
-    // 2. NOWA CZĘŚĆ: DRUKOWANIE LISTY LOKACJI NA ZEBRZE
+    // 2. NOWA CZĘŚĆ: DRUKOWANIE LISTY LOKACJI NA ZEBRZE (działa tylko na /offers)
     // =========================================================================
 
     // Funkcja tworząca ukrytą ramkę i wysyłająca dane do druku
@@ -310,6 +310,11 @@
 
     // Nasłuchiwanie na pojawienie się rozwijanego menu Material Design
     setInterval(() => {
+        // Sprawdzenie, czy jesteśmy na podstronie /offers. Jeśli nie, przerywamy sprawdzanie.
+        if (!window.location.href.includes('/offers')) {
+            return;
+        }
+
         // Szukamy otwartych paneli menu z klasą .mat-menu-panel
         const menuPanels = document.querySelectorAll('.mat-menu-panel');
         
