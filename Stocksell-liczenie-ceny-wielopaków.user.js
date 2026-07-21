@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StockSell - Przelicznik Wielopaków (SPA Autodetect)
 // @namespace    http://tampermonkey.net/
-// @version      1.4
+// @version      1.5
 // @description  Automatycznie pokazuje/ukrywa panel przelicznika przy zmianie podstron bez przeładowania strony.
 // @author       Twój Asystent AI
 // @match        https://stocksell.io/*
@@ -26,14 +26,16 @@
         container = document.createElement('div');
         container.id = 'tm-wielopak-container';
         container.style.position = 'fixed';
+        // Nowa pozycja - lewa strona z ominięciem menu bocznego
         container.style.bottom = '20px';
-        container.style.right = '20px';
+        container.style.left = '280px';
         container.style.zIndex = '9999';
         container.style.fontFamily = 'Arial, sans-serif';
         container.style.width = '220px';
         container.style.display = 'flex';
         container.style.flexDirection = 'column';
-        container.style.alignItems = 'flex-end';
+        // Wyrównanie do lewej strony
+        container.style.alignItems = 'flex-start';
 
         const contentDiv = document.createElement('div');
         contentDiv.id = 'tm-content';
@@ -160,10 +162,8 @@
 
     // --- MONITOROWANIE ZMIAN URL BEZ PRZEŁADOWYWANIA STRONY (SPA) ---
 
-    // 1. Wykrywanie zdarzeń przeglądarki (np. kliknięcie "Wstecz/Dalej")
     window.addEventListener('popstate', handleRoutingChange);
 
-    // 2. Nadpisanie pushState oraz replaceState (bo Angular zmienia URL cicho przy użyciu routera)
     const originalPushState = history.pushState;
     history.pushState = function() {
         originalPushState.apply(this, arguments);
@@ -176,8 +176,6 @@
         handleRoutingChange();
     };
 
-    // 3. Zapasowy "strażnik" (interwał), sprawdzający zmianę adresu co 1 sekundę
-    // Gwarantuje, że skrypt zareaguje, nawet jeśli Angular obejdzie standardowe zdarzenia historii.
     let lastUrl = window.location.href;
     setInterval(() => {
         if (window.location.href !== lastUrl) {
@@ -186,6 +184,5 @@
         }
     }, 1000);
 
-    // Pierwsze sprawdzenie przy pełnym załadowaniu strony
     handleRoutingChange();
 })();
