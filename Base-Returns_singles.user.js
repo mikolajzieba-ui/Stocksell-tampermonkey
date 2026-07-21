@@ -1,14 +1,16 @@
 // ==UserScript==
 // @name         Base Zwroty jednosztukowe
 // @namespace    stocksell
-// @version      1.0
+// @version      1.1
 // @match        https://panel.baselinker.com/orders_returns*
 // @grant        GM_xmlhttpRequest
+// @grant        GM_setValue
+// @grant        GM_getValue
 // @connect      script.google.com
 // @connect      script.googleusercontent.com
 // @connect      localhost
-// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/Base-returns-singles.user.js
-// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/Base-returns-singles.user.js
+// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/stocksell-scripts/main/Base-returns-singles.user.js
+// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/stocksell-scripts/main/Base-returns-singles.user.js
 // ==/UserScript==
 
 (function () {
@@ -33,8 +35,8 @@
         const CACHE_TIME_KEY = "stocksell_products_time";
         const CACHE_TTL = 10 * 60 * 60 * 1000;
 
-        const cachedData = localStorage.getItem(CACHE_KEY);
-        const cachedTime = Number(localStorage.getItem(CACHE_TIME_KEY));
+        const cachedData = GM_getValue(CACHE_KEY, null);
+        const cachedTime = Number(GM_getValue(CACHE_TIME_KEY, 0));
 
         if (
             cachedData &&
@@ -53,7 +55,7 @@
                 });
 
                 console.log(
-                    "[ReturnsPrinter] Cache loaded:",
+                    "[ReturnsPrinter] Cache loaded from GM storage:",
                     productCache.size
                 );
 
@@ -64,7 +66,7 @@
             }
         }
 
-        console.log("[ReturnsPrinter] Downloading cache...");
+        console.log("[ReturnsPrinter] Downloading fresh cache...");
 
         GM_xmlhttpRequest({
 
@@ -88,18 +90,18 @@
 
                     });
 
-                    localStorage.setItem(
+                    GM_setValue(
                         CACHE_KEY,
                         JSON.stringify(products)
                     );
 
-                    localStorage.setItem(
+                    GM_setValue(
                         CACHE_TIME_KEY,
                         String(Date.now())
                     );
 
                     console.log(
-                        "[ReturnsPrinter] Cache downloaded:",
+                        "[ReturnsPrinter] Cache downloaded and saved to GM storage:",
                         productCache.size
                     );
 
