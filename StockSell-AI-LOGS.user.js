@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         StockSell AI -> Google Sheets (Faza przechwytywania + Dowolne Create)
+// @name         StockSell AI -> Google Sheets (ID Sesji)
 // @namespace    http://tampermonkey.net/
-// @version      2.0
-// @description  Omija blokady Angulara, przechwytuje Zapisz, działa na każdym linku ze słowem "create".
+// @version      2.1
+// @description  Wysyła unikalne ID sesji, zapobiegając mieszaniu produktów.
 // @match        https://stocksell.io/*
 // @match        https://*.stocksell.io/*
 // @grant        GM_xmlhttpRequest
@@ -25,35 +25,46 @@
     ];
 
     let lastKnownUser = 'Nieznany użytkownik';
+    let currentSessionId = null; // Unikalne ID dla każdego nowego produktu
+
+    // Generuje losowy ciąg znaków np. id_16843920_ab39f
+    function generateSessionId() {
+        return 'id_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+    }
 
     document.body.addEventListener('click', function(event) {
-        // SPRAWDZENIE URL - pobieramy cały link, zmniejszamy litery i szukamy "create"
         const currentUrl = window.location.href.toLowerCase();
         if (!currentUrl.includes('create')) {
-            return; // Przerywa działanie, jeśli w linku nie ma słowa "create"
+            return; 
         }
 
         // 1. WYKRYCIE "URUCHOM AI"
         const aiButton = event.target.closest('.stocksell-plus_ai-button');
         if (aiButton) {
             console.log('[StockSell Script] Wykryto kliknięcie Uruchom AI...');
+            
+            // Generujemy nowe ID dla tego konkretnego produktu
+            currentSessionId = generateSessionId(); 
+            
             setTimeout(() => extractAndSendData('ai_run'), 5500);
             return;
         }
 
-        // 2. WYKRYCIE "ZAPISZ" i "ZAPISZ PRODUKT"
+        // 2. WYKRYCIE "ZAPISZ"
         const buttonElement = event.target.closest('button');
         if (buttonElement) {
             const btnText = buttonElement.innerText.trim().toLowerCase();
             if (btnText.includes('zapisz')) {
-                // Wizualne potwierdzenie kliknięcia - zielona ramka
                 buttonElement.style.border = "3px solid #4CAF50";
-                
                 console.log('[StockSell Script] Wykryto kliknięcie Zapisz...');
+                
                 extractAndSendData('save');
+                
+                // Po wysłaniu danych "Zapisz", czyścimy ID, żeby kolejny produkt wymusił nowe
+                setTimeout(() => { currentSessionId = null; }, 1000); 
             }
         }
-    }, true); // faza przechwytywania (true) zabezpiecza przed blokadami Angulara
+    }, true); 
 
     function extractAndSendData(actionType) {
         console.log(`[StockSell Script] Rozpoczynam pobieranie danych dla trybu: ${actionType}`);
@@ -96,7 +107,11 @@
             orderedData[field] = rawData[field] !== undefined ? rawData[field] : "";
         });
 
-        console.log(`[StockSell Script] Zebrane dane (${actionType}):`, { user: lastKnownUser, fields: orderedData });
+        console.log(`[StockSell Script] Zebrane dane (${actionType}):`, { 
+            user: lastKnownUser, 
+            fields: orderedData,
+            sessionId: currentSessionId
+        });
 
         GM_xmlhttpRequest({
             method: "POST",
@@ -107,7 +122,8 @@
             data: JSON.stringify({
                 user: lastKnownUser,
                 type: actionType,
-                fields: orderedData
+                fields: orderedData,
+                sessionId: currentSessionId || generateSessionId() // Zabezpieczenie braku sesji
             }),
             onload: function(response) {
                 console.log(`[StockSell Script] Sukces (${actionType})! Dane zapisane.`, response.responseText);
