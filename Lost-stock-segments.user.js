@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         StockSell - Zgubione przy stockowaniu - spisywanie segmentów
 // @namespace    http://tampermonkey.net/
-// @version      1.7
-// @description  Pobiera segmenty, działa tylko na /history/logs, domyślnie ukryty pod przyciskiem + Opcja drukowania lokacji (tylko w /offers).
+// @version      1.8
+// @description  Pobiera segmenty, działa tylko na /history/logs, domyślnie ukryty pod przyciskiem + Opcja drukowania lokacji alfabetycznie (tylko w /offers).
 // @author       Twój Nick
 // @match        *://*.stocksell.io/*
 // @grant        none
@@ -357,6 +357,9 @@
                     }).filter(text => text !== '');
 
                     if (items.length > 0) {
+                        // SORTOWANIE ALFABETYCZNE (z uwzględnieniem poprawności numerycznej, np. A2 przed A10)
+                        items.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
                         printLocationsToZebra(items);
                     }
                 });
