@@ -8,6 +8,8 @@
 // @grant        GM_xmlhttpRequest
 // @connect      script.google.com
 // @connect      script.googleusercontent.com
+// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/StockSell-AI-LOGS.user.js
+// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/StockSell-AI-LOGS.user.js
 // ==/UserScript==
 
 (function() {
