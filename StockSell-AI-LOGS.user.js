@@ -1,12 +1,10 @@
 // ==UserScript==
-// @name         StockSell AI -> Google Sheets (z Zapisz - stałe pola + sztywna kolejność)
+// @name         StockSell AI -> Google Sheets (Faza przechwytywania)
 // @namespace    http://tampermonkey.net/
-// @version      1.5
-// @description  Pobiera konkretne pola i zawsze układa je w tej samej kolejności. Działa tylko na create-new i create-new-v2.
-// @match        https://stocksell.io/products/create-new
-// @match        https://stocksell.io/products/create-new-v2
-// @match        https://*.stocksell.io/products/create-new
-// @match        https://*.stocksell.io/products/create-new-v2
+// @version      1.9
+// @description  Omija blokady Angulara, przechwytuje Zapisz, podświetla na zielono.
+// @match        https://stocksell.io/*
+// @match        https://*.stocksell.io/*
 // @grant        GM_xmlhttpRequest
 // @connect      script.google.com
 // @connect      script.googleusercontent.com
@@ -17,32 +15,22 @@
 (function() {
     'use strict';
 
-    const GOOGLE_MACRO_URL = 'https://script.google.com/macros/s/AKfycbzI3DzwU4nReAnV8D1v7GkAnC5dxg5W67NNgbtJm0k780JbBmnoqhhSGphDbFuGAW8Q-w/exec';
+    const GOOGLE_MACRO_URL = 'https://script.google.com/macros/s/AKfycbw9m-nG6Jw4tM6y78ZOWZughJxS0jY-tuJR4UhftrhzObzQZcuTCdEF2yrSdZoqiaDP/exec';
 
     const REQUIRED_FIELDS = [
-        "Nazwa produktu",
-        "Kolor",
-        "Sezon",
-        "Marka",
-        "Rozmiar",
-        "Wzór dominujący",
-        "Fason",
-        "Dekolt",
-        "Rękaw",
-        "Długość",
-        "Zapięcie",
-        "Materiał dominujący",
-        "Cechy dodatkowe",
-        "Linia",
-        "Odcień",
-        "Kod taryfy celnej"
+        "Nazwa produktu", "Kolor", "Sezon", "Marka", "Rozmiar",
+        "Wzór dominujący", "Fason", "Dekolt", "Rękaw", "Długość",
+        "Zapięcie", "Materiał dominujący", "Cechy dodatkowe", "Linia",
+        "Odcień", "Kod taryfy celnej"
     ];
 
+    let lastKnownUser = 'Nieznany użytkownik';
+
+    // DODANO TRUE NA KOŃCU - Kluczowe dla ominiecia blokad Angulara!
     document.body.addEventListener('click', function(event) {
-        // Sprawdzenie URL w czasie rzeczywistym (zabezpieczenie dla aplikacji SPA)
         const currentPath = window.location.pathname;
         if (currentPath !== '/products/create-new' && currentPath !== '/products/create-new-v2') {
-            return; // Przerwij działanie, jeśli jesteśmy na innej podstronie
+            return;
         }
 
         const aiButton = event.target.closest('.stocksell-plus_ai-button');
@@ -53,20 +41,28 @@
         }
 
         const buttonElement = event.target.closest('button');
-        if (buttonElement && buttonElement.innerText.toLowerCase().includes('zapisz')) {
-            console.log('[StockSell Script] Wykryto kliknięcie Zapisz...');
-            setTimeout(() => extractAndSendData('save'), 0);
+        if (buttonElement) {
+            const btnText = buttonElement.innerText.trim().toLowerCase();
+            if (btnText.includes('zapisz')) {
+                // WIZUALNE POTWIERDZENIE - Przycisk mignie na zielono
+                buttonElement.style.border = "3px solid #4CAF50";
+
+                console.log('[StockSell Script] Wykryto kliknięcie Zapisz...');
+                extractAndSendData('save');
+            }
         }
-    });
+    }, true);
 
     function extractAndSendData(actionType) {
         console.log(`[StockSell Script] Rozpoczynam pobieranie danych dla trybu: ${actionType}`);
 
         const userElement = document.querySelector('span[data-cy="username"] span.header');
-        const user = userElement ? userElement.innerText.trim() : 'Nieznany użytkownik';
+        if (userElement && userElement.innerText.trim() !== '') {
+            lastKnownUser = userElement.innerText.trim();
+        }
 
         const allFields = document.querySelectorAll('mat-form-field');
-        const rawData = {}; // Tutaj zbieramy to co znajdziemy na stronie
+        const rawData = {};
 
         allFields.forEach(field => {
             const labelElement = field.querySelector('label, mat-label, .mat-form-field-label');
@@ -93,14 +89,12 @@
             }
         });
 
-        // WYMUSZENIE KOLEJNOŚCI: Tworzymy ostateczny obiekt dokładnie w kolejności z REQUIRED_FIELDS
         const orderedData = {};
         REQUIRED_FIELDS.forEach(field => {
-            // Jeśli pole zostało znalezione - wpisz je. Jeśli nie - zostaw puste "".
             orderedData[field] = rawData[field] !== undefined ? rawData[field] : "";
         });
 
-        console.log(`[StockSell Script] Zebrane dane (${actionType}):`, { user, fields: orderedData });
+        console.log(`[StockSell Script] Zebrane dane (${actionType}):`, { user: lastKnownUser, fields: orderedData });
 
         GM_xmlhttpRequest({
             method: "POST",
@@ -109,7 +103,7 @@
                 "Content-Type": "application/json"
             },
             data: JSON.stringify({
-                user: user,
+                user: lastKnownUser,
                 type: actionType,
                 fields: orderedData
             }),
