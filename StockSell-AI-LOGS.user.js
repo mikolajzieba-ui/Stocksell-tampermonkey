@@ -1,9 +1,12 @@
 // ==UserScript==
 // @name         StockSell AI -> Google Sheets (z Zapisz - stałe pola + sztywna kolejność)
 // @namespace    http://tampermonkey.net/
-// @version      1.4
-// @description  Pobiera konkretne pola i zawsze układa je w tej samej kolejności
-// @match        https://*.stocksell.io/products*
+// @version      1.5
+// @description  Pobiera konkretne pola i zawsze układa je w tej samej kolejności. Działa tylko na create-new i create-new-v2.
+// @match        https://stocksell.io/products/create-new
+// @match        https://stocksell.io/products/create-new-v2
+// @match        https://*.stocksell.io/products/create-new
+// @match        https://*.stocksell.io/products/create-new-v2
 // @grant        GM_xmlhttpRequest
 // @connect      script.google.com
 // @connect      script.googleusercontent.com
@@ -36,6 +39,12 @@
     ];
 
     document.body.addEventListener('click', function(event) {
+        // Sprawdzenie URL w czasie rzeczywistym (zabezpieczenie dla aplikacji SPA)
+        const currentPath = window.location.pathname;
+        if (currentPath !== '/products/create-new' && currentPath !== '/products/create-new-v2') {
+            return; // Przerwij działanie, jeśli jesteśmy na innej podstronie
+        }
+
         const aiButton = event.target.closest('.stocksell-plus_ai-button');
         if (aiButton) {
             console.log('[StockSell Script] Wykryto kliknięcie Uruchom AI...');
