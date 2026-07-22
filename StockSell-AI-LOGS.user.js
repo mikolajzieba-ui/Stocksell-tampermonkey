@@ -1,15 +1,13 @@
 // ==UserScript==
-// @name         StockSell AI -> Google Sheets (Faza przechwytywania)
+// @name         StockSell AI -> Google Sheets (Faza przechwytywania + Dowolne Create)
 // @namespace    http://tampermonkey.net/
-// @version      1.9
-// @description  Omija blokady Angulara, przechwytuje Zapisz, podświetla na zielono.
+// @version      2.0
+// @description  Omija blokady Angulara, przechwytuje Zapisz, działa na każdym linku ze słowem "create".
 // @match        https://stocksell.io/*
 // @match        https://*.stocksell.io/*
 // @grant        GM_xmlhttpRequest
 // @connect      script.google.com
 // @connect      script.googleusercontent.com
-// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/StockSell-AI-LOGS.user.js
-// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/StockSell-AI-LOGS.user.js
 // ==/UserScript==
 
 (function() {
@@ -18,21 +16,22 @@
     const GOOGLE_MACRO_URL = 'https://script.google.com/macros/s/AKfycbw9m-nG6Jw4tM6y78ZOWZughJxS0jY-tuJR4UhftrhzObzQZcuTCdEF2yrSdZoqiaDP/exec';
 
     const REQUIRED_FIELDS = [
-        "Nazwa produktu", "Kolor", "Sezon", "Marka", "Rozmiar",
-        "Wzór dominujący", "Fason", "Dekolt", "Rękaw", "Długość",
-        "Zapięcie", "Materiał dominujący", "Cechy dodatkowe", "Linia",
+        "Nazwa produktu", "Kolor", "Sezon", "Marka", "Rozmiar", 
+        "Wzór dominujący", "Fason", "Dekolt", "Rękaw", "Długość", 
+        "Zapięcie", "Materiał dominujący", "Cechy dodatkowe", "Linia", 
         "Odcień", "Kod taryfy celnej"
     ];
 
     let lastKnownUser = 'Nieznany użytkownik';
 
-    // DODANO TRUE NA KOŃCU - Kluczowe dla ominiecia blokad Angulara!
     document.body.addEventListener('click', function(event) {
-        const currentPath = window.location.pathname;
-        if (currentPath !== '/products/create-new' && currentPath !== '/products/create-new-v2') {
-            return;
+        // SPRAWDZENIE URL - pobieramy cały link, zmniejszamy litery i szukamy "create"
+        const currentUrl = window.location.href.toLowerCase();
+        if (!currentUrl.includes('create')) {
+            return; // Przerywa działanie, jeśli w linku nie ma słowa "create"
         }
 
+        // 1. WYKRYCIE "URUCHOM AI"
         const aiButton = event.target.closest('.stocksell-plus_ai-button');
         if (aiButton) {
             console.log('[StockSell Script] Wykryto kliknięcie Uruchom AI...');
@@ -40,18 +39,19 @@
             return;
         }
 
+        // 2. WYKRYCIE "ZAPISZ" i "ZAPISZ PRODUKT"
         const buttonElement = event.target.closest('button');
         if (buttonElement) {
             const btnText = buttonElement.innerText.trim().toLowerCase();
             if (btnText.includes('zapisz')) {
-                // WIZUALNE POTWIERDZENIE - Przycisk mignie na zielono
+                // Wizualne potwierdzenie kliknięcia - zielona ramka
                 buttonElement.style.border = "3px solid #4CAF50";
-
+                
                 console.log('[StockSell Script] Wykryto kliknięcie Zapisz...');
                 extractAndSendData('save');
             }
         }
-    }, true);
+    }, true); // faza przechwytywania (true) zabezpiecza przed blokadami Angulara
 
     function extractAndSendData(actionType) {
         console.log(`[StockSell Script] Rozpoczynam pobieranie danych dla trybu: ${actionType}`);
