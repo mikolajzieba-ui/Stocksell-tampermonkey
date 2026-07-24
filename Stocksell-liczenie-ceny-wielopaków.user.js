@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         StockSell - Przelicznik Wielopaków (SPA Autodetect)
 // @namespace    http://tampermonkey.net/
-// @version      1.5
-// @description  Automatycznie pokazuje/ukrywa panel przelicznika przy zmianie podstron bez przeładowania strony.
+// @version      1.9
+// @description  Automatycznie pokazuje/ukrywa panel przelicznika przy zmianie podstron bez przeładowania strony. Szybkie guziki z pastelowymi kolorami.
 // @author       Twój Asystent AI
 // @match        https://stocksell.io/*
 // @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/Stocksell-liczenie-ceny-wielopaków.user.js
@@ -26,7 +26,6 @@
         container = document.createElement('div');
         container.id = 'tm-wielopak-container';
         container.style.position = 'fixed';
-        // Nowa pozycja - lewa strona z ominięciem menu bocznego
         container.style.bottom = '20px';
         container.style.left = '280px';
         container.style.zIndex = '9999';
@@ -34,7 +33,6 @@
         container.style.width = '220px';
         container.style.display = 'flex';
         container.style.flexDirection = 'column';
-        // Wyrównanie do lewej strony
         container.style.alignItems = 'flex-start';
 
         const contentDiv = document.createElement('div');
@@ -49,8 +47,16 @@
         contentDiv.style.width = '100%';
         contentDiv.style.boxSizing = 'border-box';
 
+        // Dodane kolory pastelowe w stylach inline dla każdego guzika oraz większa czcionka
         contentDiv.innerHTML = `
-            <div style="margin-bottom: 12px; font-weight: bold; color: #333; font-size: 14px; text-align: center;">Przelicznik Wielopaków</div>
+            <div style="margin-bottom: 8px; font-weight: bold; color: #333; font-size: 14px; text-align: center;">Przelicznik Wielopaków</div>
+
+            <div style="display: flex; gap: 4px; margin-bottom: 12px; justify-content: space-between;">
+                <button id="tm-quick-1-2" style="flex: 1; padding: 6px 0; font-size: 13px; font-weight: bold; cursor: pointer; background-color: #e6f7ff; border: 1px solid #91d5ff; border-radius: 4px; color: #333; transition: 0.2s;">1/2</button>
+                <button id="tm-quick-1-3" style="flex: 1; padding: 6px 0; font-size: 13px; font-weight: bold; cursor: pointer; background-color: #f6ffed; border: 1px solid #b7eb8f; border-radius: 4px; color: #333; transition: 0.2s;">1/3</button>
+                <button id="tm-quick-2-3" style="flex: 1; padding: 6px 0; font-size: 13px; font-weight: bold; cursor: pointer; background-color: #fffbe6; border: 1px solid #ffe58f; border-radius: 4px; color: #333; transition: 0.2s;">2/3</button>
+                <button id="tm-quick-3-4" style="flex: 1; padding: 6px 0; font-size: 13px; font-weight: bold; cursor: pointer; background-color: #fff0f6; border: 1px solid #ffadd2; border-radius: 4px; color: #333; transition: 0.2s;">3/4</button>
+            </div>
 
             <label style="display: block; margin-bottom: 4px; font-size: 12px; color: #555;">Ile mam (fizycznie):</label>
             <input type="number" id="tm-has-items" style="width: 100%; margin-bottom: 12px; padding: 6px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px;" value="1">
@@ -92,8 +98,8 @@
             }
         });
 
-        // Logika kalkulatora
-        document.getElementById('tm-calculate-btn').addEventListener('click', () => {
+        // Wydzielona funkcja licząca
+        const calculateAndFill = () => {
             const hasItems = parseFloat(document.getElementById('tm-has-items').value);
             const totalItems = parseFloat(document.getElementById('tm-total-items').value);
 
@@ -132,6 +138,7 @@
             startingPriceInput.dispatchEvent(new Event('input', { bubbles: true }));
             buyNowPriceInput.dispatchEvent(new Event('input', { bubbles: true }));
 
+            // Potwierdzenie wizualne na głównym przycisku
             const btn = document.getElementById('tm-calculate-btn');
             btn.innerText = 'Przeliczono!';
             btn.style.backgroundColor = '#138a0b';
@@ -140,7 +147,36 @@
                 btn.innerText = 'Przelicz i wpisz';
                 btn.style.backgroundColor = '#0052cc';
             }, 1500);
+        };
+
+        // Logika szybkich przycisków
+        const setQuickValuesAndCalculate = (has, total) => {
+            document.getElementById('tm-has-items').value = has;
+            document.getElementById('tm-total-items').value = total;
+            calculateAndFill();
+        };
+
+        document.getElementById('tm-quick-1-2').addEventListener('click', () => setQuickValuesAndCalculate(1, 2));
+        document.getElementById('tm-quick-1-3').addEventListener('click', () => setQuickValuesAndCalculate(1, 3));
+        document.getElementById('tm-quick-2-3').addEventListener('click', () => setQuickValuesAndCalculate(2, 3));
+        document.getElementById('tm-quick-3-4').addEventListener('click', () => setQuickValuesAndCalculate(3, 4));
+
+        // Zaktualizowane Hover efekty dla kolorowych przycisków
+        const quickBtnsConfig = [
+            { id: 'tm-quick-1-2', bg: '#e6f7ff', hover: '#bae0ff' }, // blady niebieski
+            { id: 'tm-quick-1-3', bg: '#f6ffed', hover: '#d9f7be' }, // blady zielony
+            { id: 'tm-quick-2-3', bg: '#fffbe6', hover: '#fff1b8' }, // blady żółty
+            { id: 'tm-quick-3-4', bg: '#fff0f6', hover: '#ffd6e7' }  // blady różowy
+        ];
+
+        quickBtnsConfig.forEach(config => {
+            const btn = document.getElementById(config.id);
+            btn.onmouseover = () => { btn.style.backgroundColor = config.hover; };
+            btn.onmouseout = () => { btn.style.backgroundColor = config.bg; };
         });
+
+        // Podpięcie funkcji pod główny przycisk na wypadek wpisywania ręcznego
+        document.getElementById('tm-calculate-btn').addEventListener('click', calculateAndFill);
     }
 
     // Usuwanie panelu z ekranu
