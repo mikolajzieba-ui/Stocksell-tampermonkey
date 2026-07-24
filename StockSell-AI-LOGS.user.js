@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         StockSell AI -> Google Sheets (Dynamiczne Kategorie)
 // @namespace    http://tampermonkey.net/
-// @version      2.3
-// @description  Dynamicznie wyłapuje pola AI, zapamiętuje ich kolejność do zapisu, używa ID sesji i obserwatora mutacji.
+// @version      2.4
+// @description  Ignoruje zapis, jeśli AI nie było uruchamiane. Dynamicznie wyłapuje pola.
 // @match        https://stocksell.io/*
 // @match        https://*.stocksell.io/*
 // @grant        GM_xmlhttpRequest
@@ -58,12 +58,19 @@
         if (buttonElement) {
             const btnText = buttonElement.innerText.trim().toLowerCase();
             if (btnText.includes('zapisz')) {
+
+                // ZABEZPIECZENIE: Jeśli nie ma ID sesji (AI nie było kliknięte), przerywamy!
+                if (!currentSessionId) {
+                    console.log('[StockSell Script] Kliknięto Zapisz, ale AI nie było używane. Ignoruję wysyłkę do Arkusza.');
+                    return;
+                }
+
                 buttonElement.style.border = "3px solid #4CAF50";
-                console.log('[StockSell Script] Wykryto kliknięcie Zapisz...');
+                console.log('[StockSell Script] Wykryto kliknięcie Zapisz po użyciu AI...');
 
                 extractAndSendData('save');
 
-                // Czyszczenie pamięci po zapisie produktu
+                // Czyszczenie pamięci po zapisie produktu (przygotowanie pod kolejny ręczny lub z AI)
                 setTimeout(() => {
                     currentSessionId = null;
                     aiFilledLabels = [];
@@ -117,11 +124,9 @@
         // Decydujemy, których etykiet użyć
         let labelsToProcess = [];
         if (actionType === 'ai_run') {
-            aiFilledLabels = detectedAiLabels; // Zapisujemy układ wygenerowany przez AI na potem
+            aiFilledLabels = detectedAiLabels;
             labelsToProcess = aiFilledLabels;
         } else if (actionType === 'save') {
-            // Przy zapisie bazujemy na tym, co skrypt zapamiętał wcześniej (żeby zachować kolejność i ilość)
-            // Awaryjnie, gdyby ktoś kliknął Zapisz bez klikania "Uruchom AI", bierzemy to, co ma tag.
             labelsToProcess = aiFilledLabels.length > 0 ? aiFilledLabels : detectedAiLabels;
         }
 
@@ -147,7 +152,7 @@
                 user: lastKnownUser,
                 type: actionType,
                 fields: orderedData,
-                sessionId: currentSessionId || generateSessionId()
+                sessionId: currentSessionId
             }),
             onload: function(response) {
                 console.log(`[StockSell Script] Sukces (${actionType})! Dane zapisane.`, response.responseText);
