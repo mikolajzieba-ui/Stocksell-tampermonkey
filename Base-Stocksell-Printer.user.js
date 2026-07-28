@@ -250,10 +250,66 @@
         printBtn.onclick = printMissing;
         header.appendChild(printBtn);
 
-        // KRYTYCZNA POPRAWKA: Jeśli Zebra jest już gotowa, zaktualizuj guzik od razu
+        // Naprawa błędu z resetującym się statusem przycisku
         if (zebraReady) {
             updateButtonReady();
         }
+    }
+
+    //////////////////////////////////////////////////////
+    // IMAGE ENLARGER
+    //////////////////////////////////////////////////////
+    function initImageEnlarger() {
+        if (!document.getElementById("stocksell_large_image_overlay")) {
+            const overlay = document.createElement("div");
+            overlay.id = "stocksell_large_image_overlay";
+            overlay.style.cssText = `
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                z-index: 999999;
+                display: none;
+                background: white;
+                padding: 15px;
+                border-radius: 12px;
+                box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+                pointer-events: none;
+            `;
+            
+            const img = document.createElement("img");
+            img.id = "stocksell_large_image";
+            img.style.cssText = `
+                max-width: 600px;
+                max-height: 600px;
+                object-fit: contain;
+                border-radius: 8px;
+            `;
+            
+            overlay.appendChild(img);
+            document.body.appendChild(overlay);
+        }
+
+        const thumbs = document.querySelectorAll("img.img_thumb:not([data-hover-added])");
+        
+        thumbs.forEach(thumb => {
+            thumb.setAttribute("data-hover-added", "true");
+            
+            thumb.addEventListener("mouseenter", function() {
+                const overlay = document.getElementById("stocksell_large_image_overlay");
+                const largeImg = document.getElementById("stocksell_large_image");
+                
+                let imgSrc = this.getAttribute("data-src") || this.src;
+                imgSrc = imgSrc.replace(/\/\d+\/\d+\.([a-zA-Z]+)/, '/800/800.$1'); 
+
+                largeImg.src = imgSrc;
+                overlay.style.display = "block";
+            });
+            
+            thumb.addEventListener("mouseleave", function() {
+                document.getElementById("stocksell_large_image_overlay").style.display = "none";
+            });
+        });
     }
 
     //////////////////////////////////////////////////////
@@ -261,6 +317,9 @@
     //////////////////////////////////////////////////////
     preloadProducts();
     initPrinter();
-    setInterval(addButton, 1000);
+    setInterval(() => {
+        addButton();
+        initImageEnlarger();
+    }, 1000);
 
 })();
