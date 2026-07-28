@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Stocksell Printer
 // @namespace    stocksell
-// @version      2.6
+// @version      2.7
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -32,7 +32,6 @@
         const CACHE_TIME_KEY = "stocksell_products_time";
         const CACHE_TTL = 10 * 60 * 60 * 1000;
 
-        // Użycie GM_getValue zamiast localStorage.getItem
         const cachedData = GM_getValue(CACHE_KEY, null);
         const cachedTime = Number(GM_getValue(CACHE_TIME_KEY, 0));
 
@@ -61,7 +60,6 @@
                         productCache.set(String(product.sku), product);
                     });
 
-                    // Użycie GM_setValue zamiast localStorage.setItem
                     GM_setValue(CACHE_KEY, JSON.stringify(products));
                     GM_setValue(CACHE_TIME_KEY, String(Date.now()));
 
@@ -251,6 +249,11 @@
         `;
         printBtn.onclick = printMissing;
         header.appendChild(printBtn);
+
+        // KRYTYCZNA POPRAWKA: Jeśli Zebra jest już gotowa, zaktualizuj guzik od razu
+        if (zebraReady) {
+            updateButtonReady();
+        }
     }
 
     //////////////////////////////////////////////////////
