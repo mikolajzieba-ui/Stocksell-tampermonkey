@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Stocksell Printer
 // @namespace    stocksell
-// @version      2.26
+// @version      2.46
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -9,6 +9,7 @@
 // @connect      script.google.com
 // @connect      script.googleusercontent.com
 // @connect      localhost
+// @connect      127.0.0.1
 // @connect      allegro.pl
 // @connect      a.allegroimg.com
 // @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/stocksell-scripts/main/Base-Stocksell-Printer.user.js
@@ -20,8 +21,10 @@
 
     const API_URL = "https://script.google.com/macros/s/AKfycbzQEqxAKjhMQS35zaUQHZ0aE6g9SAsiZyzPxUVnVmAb_U9tpGhjsP3vHZkBoapFhxEJ/exec";
 
-    let zebraReady = false;
-    let zebraDevice = null;
+    let printerReady = false;
+    let printerType = null; // "zebra" lub "dymo"
+    let activeDeviceName = null;
+    let zebraDeviceObj = null;
     let printBtn = null;
 
     const productCache = new Map();
@@ -75,15 +78,18 @@
     }
 
     //////////////////////////////////////////////////////
-    // ZEBRA
+    // WYKRYWANIE DRUKARKI (ZEBRA -> FALLBACK DO HTTPS DYMO)
     //////////////////////////////////////////////////////
     function initPrinter() {
-        let attempts = 0;
-        const maxAttempts = 30;
+        let zebraAttempts = 0;
+        const maxZebraAttempts = 1;
 
-        function tryConnect() {
-            attempts++;
-            console.log(`Zebra connect attempt ${attempts}/${maxAttempts}`);
+        let dymoAttempts = 0;
+        const maxDymoAttempts = 10;
+
+        function tryConnectZebra() {
+            zebraAttempts++;
+            console.log(`[ZEBRA DEBUG] Próba połączenia ${zebraAttempts}/${maxZebraAttempts}`);
 
             GM_xmlhttpRequest({
                 method: "GET",
@@ -92,81 +98,178 @@
                 onload: function (res) {
                     try {
                         const data = JSON.parse(res.responseText);
-                        const printer = data.printer.find(p => p.name && p.name.includes("ZD411"));
-                        if (!printer) throw "No printer";
+                        console.log("[ZEBRA DEBUG] Odpowiedź z portu 9100:", data);
 
-                        zebraDevice = printer;
-                        zebraReady = true;
-                        updateButtonReady();
-                        console.log("Zebra connected");
-                    } catch {
-                        retry();
+                        const printer = data.printer.find(p => p.name && (p.name.includes("ZD411") || p.name.includes("asdasd")));
+
+                        if (!printer) {
+                            console.log("[ZEBRA DEBUG] Brak pasującej drukarki Zebra w zwróconym JSON.");
+                            throw "No compatible Zebra found";
+                        }
+
+                        zebraDeviceObj = printer;
+                        activeDeviceName = printer.name;
+                        printerType = "zebra";
+                        printerReady = true;
+
+                        let shortName = activeDeviceName.split("-")[0].trim();
+                        updateButtonReady(shortName);
+                        console.log(`[ZEBRA DEBUG] SUKCES! Połączono z Zebrą: ${activeDeviceName}`);
+                    } catch (e) {
+                        console.log("[ZEBRA DEBUG] Błąd w odczycie lub brak drukarki:", e);
+                        tryConnectZebraRetry();
                     }
                 },
-                onerror: retry,
-                ontimeout: retry
+                onerror: function(err) {
+                    console.log("[ZEBRA DEBUG] Błąd sieciowy:", err);
+                    tryConnectZebraRetry();
+                },
+                ontimeout: function() {
+                    console.log("[ZEBRA DEBUG] Timeout!");
+                    tryConnectZebraRetry();
+                }
             });
         }
 
-        function retry() {
-            if (zebraReady) return;
-            if (attempts >= maxAttempts) {
-                console.error("Zebra timeout");
+        function tryConnectZebraRetry() {
+            if (printerReady) return;
+            if (zebraAttempts >= maxZebraAttempts) {
+                console.log("Nie znaleziono Zebry. Sprawdzam DYMO DLS Web Service...");
+                tryConnectDymo();
                 return;
             }
-            setTimeout(tryConnect, 1000);
+            setTimeout(tryConnectZebra, 800);
         }
 
-        tryConnect();
+        function tryConnectDymo() {
+            dymoAttempts++;
+            console.log(`Próba połączenia z DYMO (HTTPS) ${dymoAttempts}/${maxDymoAttempts}`);
+
+            GM_xmlhttpRequest({
+                method: "GET",
+                url: "https://localhost:41951/DYMO/DLS/Printing/StatusConnected",
+                timeout: 1500,
+                onload: function (res) {
+                    try {
+                        if (res.status === 200 && res.responseText.includes("true")) {
+                            console.log("Usługa DYMO działa. Pobieram listę podłączonych drukarek...");
+                            fetchDymoPrinters();
+                        } else {
+                            throw "Not ready";
+                        }
+                    } catch {
+                        tryConnectDymoRetry();
+                    }
+                },
+                onerror: function(err) {
+                    tryConnectDymoRetry();
+                },
+                ontimeout: tryConnectDymoRetry
+            });
+        }
+
+        function fetchDymoPrinters() {
+            GM_xmlhttpRequest({
+                method: "GET",
+                url: "https://localhost:41951/DYMO/DLS/Printing/GetPrinters",
+                onload: function(res) {
+                    if (res.status === 200) {
+                        console.log("[DYMO DEBUG] Lista drukarek od usługi:", res.responseText);
+                        let dymoName = null;
+
+                        let cleanText = res.responseText.replace(/^"|"$/g, '');
+                        cleanText = cleanText.replace(/\\/g, '');
+                        cleanText = cleanText.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+
+                        const xmlMatch = cleanText.match(/<Name>(.*?)<\/Name>/i);
+
+                        if (xmlMatch && xmlMatch[1]) {
+                            dymoName = xmlMatch[1].trim();
+                        } else {
+                            try {
+                                const jsonResponse = JSON.parse(res.responseText);
+                                if (jsonResponse && jsonResponse.length > 0 && jsonResponse[0].name) {
+                                    dymoName = jsonResponse[0].name.trim();
+                                }
+                            } catch (e) {}
+                        }
+
+                        if (dymoName) {
+                            activeDeviceName = dymoName;
+                            printerType = "dymo";
+                            printerReady = true;
+                            updateButtonReady("DYMO " + activeDeviceName);
+                            console.log(`[DYMO DEBUG] SUKCES! Połączono z drukarką: ${activeDeviceName}`);
+                        } else {
+                            console.error("[DYMO DEBUG] Usługa DYMO działa, ale nie wykryto tagu <Name> w odpowiedzi!");
+                            tryConnectDymoRetry();
+                        }
+                    }
+                },
+                onerror: function() {
+                    tryConnectDymoRetry();
+                }
+            });
+        }
+
+        function tryConnectDymoRetry() {
+            if (printerReady) return;
+            if (dymoAttempts >= maxDymoAttempts) {
+                console.error("Nie znaleziono ani Zebry, ani podłączonej drukarki DYMO.");
+                if (printBtn) printBtn.innerHTML = "❌ Brak drukarki (Zebra/DYMO)";
+                return;
+            }
+            setTimeout(tryConnectDymo, 1000);
+        }
+
+        tryConnectZebra();
     }
 
     //////////////////////////////////////////////////////
-    // SEND
+    // WYSYŁANIE WYDRUKU (ZEBRA LUB DYMO)
     //////////////////////////////////////////////////////
-    function sendToZebra(zpl) {
-        GM_xmlhttpRequest({
-            method: "POST",
-            url: "http://localhost:9100/write",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            data: JSON.stringify({
-                device: zebraDevice,
-                data: zpl
-            })
-        });
+    function printLabel(title, code) {
+        if (!printerReady) return;
+
+        if (printerType === "zebra") {
+            const zpl = createZPL(title, code);
+            GM_xmlhttpRequest({
+                method: "POST",
+                url: "http://localhost:9100/write",
+                headers: { "Content-Type": "application/json" },
+                data: JSON.stringify({
+                    device: zebraDeviceObj,
+                    data: zpl
+                })
+            });
+        } else if (printerType === "dymo") {
+            const dymoXml = createDymoXml(title, code);
+
+            const payload = "printerName=" + encodeURIComponent(activeDeviceName) +
+                            "&printParamsXml=" + encodeURIComponent("") +
+                            "&labelSetXml=" + encodeURIComponent("") +
+                            "&labelXml=" + encodeURIComponent(dymoXml);
+
+            console.log(`[DYMO DEBUG] Wysyłam polecenie druku do: ${activeDeviceName}`);
+
+            GM_xmlhttpRequest({
+                method: "POST",
+                url: "https://localhost:41951/DYMO/DLS/Printing/PrintLabel",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                data: payload,
+                onload: function(res) {
+                    console.log(`[DYMO DEBUG] Status wydruku: ${res.status}`);
+                    console.log(`[DYMO DEBUG] Odpowiedź serwera DYMO:`, res.responseText);
+                },
+                onerror: function(err) {
+                    console.error("[DYMO DEBUG] Wystąpił błąd sieciowy podczas próby wydruku:", err);
+                }
+            });
+        }
     }
 
     //////////////////////////////////////////////////////
-    // BUTTON
-    //////////////////////////////////////////////////////
-    function updateButtonReady() {
-        if (!printBtn) return;
-        printBtn.disabled = false;
-        printBtn.innerHTML = "🖨 Drukuj brakujące kody stocksell";
-        printBtn.style.background = "#10b981";
-    }
-
-    //////////////////////////////////////////////////////
-    // HELPERS
-    //////////////////////////////////////////////////////
-    function extractSku(text) {
-        const match = text.match(/\[SKU\s+(.*?)\]/i);
-        if (!match) return null;
-        return match[1].trim();
-    }
-
-    function formatCode(code) {
-        return String(code).match(/.{1,3}/g).join(" ");
-    }
-
-    function toZplHexUtf8(text) {
-        const bytes = new TextEncoder().encode(text);
-        return Array.from(bytes).map(b => "_" + b.toString(16).padStart(2, "0").toUpperCase()).join("");
-    }
-
-    //////////////////////////////////////////////////////
-    // ZPL
+    // SZABLONY ETYKIET
     //////////////////////////////////////////////////////
     function createZPL(title, code) {
         const safeTitle = title.replace(/\^/g, "").substring(0, 80);
@@ -197,11 +300,158 @@
 `;
     }
 
+    function createDymoXml(title, code) {
+        const safeTitle = title.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+        // Przełamujemy tytuł na max 3 linie (ok. 38 znaków na linię), używając encji HTML dla nowej linii (&#10;)
+        const wrappedTitle = wrapTextForDymo(safeTitle, 38);
+        const fCode = formatCode(code);
+
+        return `<?xml version="1.0" encoding="utf-8"?>
+<DieCutLabel Version="8.0" Units="twips">
+  <PaperOrientation>Portrait</PaperOrientation>
+  <Id>Multipurpose11354</Id>
+  <PaperName>11354 Multi-Purpose</PaperName>
+  <DrawCommands/>
+
+  <ObjectInfo>
+    <TextObject>
+      <Name>TITLE</Name>
+      <ForeColor Alpha="255" Red="0" Green="0" Blue="0" />
+      <BackColor Alpha="0" Red="255" Green="255" Blue="255" />
+      <LinkedObjectName></LinkedObjectName>
+      <Rotation>Rotation0</Rotation>
+      <IsMirrored>False</IsMirrored>
+      <IsVariable>False</IsVariable>
+      <HorizontalAlignment>Center</HorizontalAlignment>
+      <VerticalAlignment>Top</VerticalAlignment>
+      <TextFitMode>ShrinkToFit</TextFitMode>
+      <UseFullFontHeight>True</UseFullFontHeight>
+      <Verticalized>False</Verticalized>
+      <StyledText>
+        <Element>
+          <String>${wrappedTitle}</String>
+          <Attributes>
+            <Font Family="Arial" Size="11" Bold="True" Italic="False" Underline="False" Strikeout="False" />
+            <ForeColor Alpha="255" Red="0" Green="0" Blue="0" />
+          </Attributes>
+        </Element>
+      </StyledText>
+    </TextObject>
+    <Bounds X="100" Y="100" Width="3030" Height="750" />
+  </ObjectInfo>
+
+  <ObjectInfo>
+    <BarcodeObject>
+      <Name>BARCODE</Name>
+      <ForeColor Alpha="255" Red="0" Green="0" Blue="0" />
+      <BackColor Alpha="0" Red="255" Green="255" Blue="255" />
+      <LinkedObjectName></LinkedObjectName>
+      <Rotation>Rotation0</Rotation>
+      <IsMirrored>False</IsMirrored>
+      <IsVariable>False</IsVariable>
+      <Text>${code}</Text>
+      <Type>Code128Auto</Type>
+      <Size>Medium</Size>
+      <TextPosition>None</TextPosition>
+      <TextFont Family="Arial" Size="8" Bold="False" Italic="False" Underline="False" Strikeout="False" />
+      <CheckSumFont Family="Arial" Size="8" Bold="False" Italic="False" Underline="False" Strikeout="False" />
+      <TextEmbedding>None</TextEmbedding>
+      <ECLevel>0</ECLevel>
+      <HorizontalAlignment>Center</HorizontalAlignment>
+      <QuietZonesPadding Left="0" Top="0" Right="0" Bottom="0" />
+    </BarcodeObject>
+    <Bounds X="100" Y="580" Width="3030" Height="580" />
+  </ObjectInfo>
+
+  <ObjectInfo>
+    <TextObject>
+      <Name>CODE</Name>
+      <ForeColor Alpha="255" Red="0" Green="0" Blue="0" />
+      <BackColor Alpha="0" Red="255" Green="255" Blue="255" />
+      <LinkedObjectName></LinkedObjectName>
+      <Rotation>Rotation0</Rotation>
+      <IsMirrored>False</IsMirrored>
+      <IsVariable>False</IsVariable>
+      <HorizontalAlignment>Center</HorizontalAlignment>
+      <VerticalAlignment>Middle</VerticalAlignment>
+      <TextFitMode>ShrinkToFit</TextFitMode>
+      <UseFullFontHeight>True</UseFullFontHeight>
+      <Verticalized>False</Verticalized>
+      <StyledText>
+        <Element>
+          <String>${fCode}</String>
+          <Attributes>
+            <Font Family="Arial" Size="26" Bold="True" Italic="False" Underline="False" Strikeout="False" />
+            <ForeColor Alpha="255" Red="0" Green="0" Blue="0" />
+          </Attributes>
+        </Element>
+      </StyledText>
+    </TextObject>
+    <Bounds X="100" Y="1200" Width="3030" Height="400" />
+  </ObjectInfo>
+
+</DieCutLabel>`;
+    }
+
     //////////////////////////////////////////////////////
-    // PRINT
+    // BUTTON & STATUS
+    //////////////////////////////////////////////////////
+    function updateButtonReady(printerName) {
+        if (!printBtn) return;
+        printBtn.disabled = false;
+
+        let shortName = String(printerName);
+        if(shortName.length > 25) shortName = shortName.substring(0, 22) + "...";
+
+        printBtn.innerHTML = `🖨 Drukuj brakujące kody (${shortName})`;
+        printBtn.style.background = "#10b981";
+    }
+
+    //////////////////////////////////////////////////////
+    // HELPERS
+    //////////////////////////////////////////////////////
+    function extractSku(text) {
+        const match = text.match(/\[SKU\s+(.*?)\]/i);
+        if (!match) return null;
+        return match[1].trim();
+    }
+
+    function formatCode(code) {
+        return String(code).match(/.{1,3}/g).join(" ");
+    }
+
+    function toZplHexUtf8(text) {
+        const bytes = new TextEncoder().encode(text);
+        return Array.from(bytes).map(b => "_" + b.toString(16).padStart(2, "0").toUpperCase()).join("");
+    }
+
+    // Funkcja na twardo wstawiająca nową linię po określonej liczbie znaków (dla DYMO)
+    function wrapTextForDymo(text, maxLength) {
+        if (!text) return "";
+        let words = text.split(' ');
+        let lines = [];
+        let currentLine = '';
+
+        for(let word of words) {
+            if((currentLine + word).length > maxLength) {
+                if (currentLine.trim() !== '') lines.push(currentLine.trim());
+                currentLine = word + ' ';
+            } else {
+                currentLine += word + ' ';
+            }
+        }
+        if (currentLine.trim() !== '') lines.push(currentLine.trim());
+
+        // Zwracamy maksymalnie 3 linijki, łącząc je encją nowej linii
+        return lines.slice(0, 3).join('&#10;');
+    }
+
+    //////////////////////////////////////////////////////
+    // PRINT ACTION
     //////////////////////////////////////////////////////
     async function printMissing() {
-        if (!zebraReady) return;
+        if (!printerReady) return;
 
         const rows = [...document.querySelectorAll("td.td_product_name p")];
 
@@ -213,16 +463,12 @@
             const product = productCache.get(sku);
             if (!product) continue;
 
-            const zpl = createZPL(product.title, product.code);
-            sendToZebra(zpl);
+            printLabel(product.title, product.code);
 
             row.style.background = "rgba(16,185,129,.2)";
         }
     }
 
-    //////////////////////////////////////////////////////
-    // BUTTON ADD
-    //////////////////////////////////////////////////////
     function addButton() {
         if (document.getElementById("stocksellPrint")) return;
 
@@ -235,7 +481,7 @@
         printBtn = document.createElement("button");
         printBtn.id = "stocksellPrint";
         printBtn.disabled = true;
-        printBtn.innerHTML = "⏳ Łączenie z Zebra...";
+        printBtn.innerHTML = "⏳ Szukanie drukarki (Zebra/DYMO)...";
         printBtn.style.cssText = `
             margin-left:14px;
             padding:10px 18px;
@@ -250,13 +496,15 @@
         printBtn.onclick = printMissing;
         header.appendChild(printBtn);
 
-        if (zebraReady) {
-            updateButtonReady();
+        if (printerReady) {
+            let shortName = activeDeviceName || "Drukarka";
+            if(printerType === "zebra") shortName = shortName.split("-")[0].trim();
+            updateButtonReady((printerType === "zebra" ? "" : "DYMO ") + shortName);
         }
     }
 
     //////////////////////////////////////////////////////
-    // IMAGE ENLARGER (TYLKO ALLEGRO I ERLI)
+    // IMAGE ENLARGER (ALLEGRO I ERLI)
     //////////////////////////////////////////////////////
     function initImageEnlarger() {
         if (!document.getElementById("stocksell_large_image_overlay")) {
@@ -317,7 +565,6 @@
                 const tr = this.closest("tr");
                 if (!tr) return;
 
-                // Ignorujemy Empik całkowicie, łapiemy tylko Allegro i Erli
                 const linkEl = tr.querySelector('a[href*="allegro.pl/oferta/"], a[href*="code=erli"]');
                 if (!linkEl) return;
 
@@ -356,7 +603,6 @@
                 const originalUrl = linkEl.href;
                 let fetchUrl = originalUrl;
 
-                // ERLI -> Transformacja na link do Allegro
                 if (originalUrl.includes('code=erli')) {
                     const erliIdMatch = originalUrl.match(/outer_item_id=([^&]+)/);
                     const erliId = (erliIdMatch && erliIdMatch[1]) ? erliIdMatch[1] : linkEl.innerText.trim();
