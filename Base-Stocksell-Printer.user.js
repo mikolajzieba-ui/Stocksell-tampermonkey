@@ -12,8 +12,8 @@
 // @connect      127.0.0.1
 // @connect      allegro.pl
 // @connect      a.allegroimg.com
-// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/stocksell-scripts/main/Base-Stocksell-Printer.user.js
-// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/stocksell-scripts/main/Base-Stocksell-Printer.user.js
+// @downloadURL  https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Base-Stocksell-Printer.user.js
+// @updateURL    https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Base-Stocksell-Printer.user.js
 // ==/UserScript==
 
 (function () {
