@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Stocksell Printer
 // @namespace    stocksell
-// @version      2.7
+// @version      2.26
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -9,6 +9,8 @@
 // @connect      script.google.com
 // @connect      script.googleusercontent.com
 // @connect      localhost
+// @connect      allegro.pl
+// @connect      a.allegroimg.com
 // @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/stocksell-scripts/main/Base-Stocksell-Printer.user.js
 // @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/stocksell-scripts/main/Base-Stocksell-Printer.user.js
 // ==/UserScript==
@@ -23,6 +25,7 @@
     let printBtn = null;
 
     const productCache = new Map();
+    const marketplaceImageCache = new Map();
 
     //////////////////////////////////////////////////////
     // CACHE SHEETS
@@ -157,9 +160,6 @@
         return String(code).match(/.{1,3}/g).join(" ");
     }
 
-    //////////////////////////////////////////////////////
-    // UTF8 -> HEX
-    //////////////////////////////////////////////////////
     function toZplHexUtf8(text) {
         const bytes = new TextEncoder().encode(text);
         return Array.from(bytes).map(b => "_" + b.toString(16).padStart(2, "0").toUpperCase()).join("");
@@ -250,19 +250,19 @@
         printBtn.onclick = printMissing;
         header.appendChild(printBtn);
 
-        // Naprawa błędu z resetującym się statusem przycisku
         if (zebraReady) {
             updateButtonReady();
         }
     }
 
     //////////////////////////////////////////////////////
-    // IMAGE ENLARGER
+    // IMAGE ENLARGER (TYLKO ALLEGRO I ERLI)
     //////////////////////////////////////////////////////
     function initImageEnlarger() {
         if (!document.getElementById("stocksell_large_image_overlay")) {
             const overlay = document.createElement("div");
             overlay.id = "stocksell_large_image_overlay";
+
             overlay.style.cssText = `
                 position: fixed;
                 top: 50%;
@@ -275,8 +275,23 @@
                 border-radius: 12px;
                 box-shadow: 0 20px 50px rgba(0,0,0,0.5);
                 pointer-events: none;
+                min-width: 150px;
+                min-height: 150px;
+                align-items: center;
+                justify-content: center;
             `;
-            
+
+            const loadingText = document.createElement("div");
+            loadingText.id = "stocksell_image_loading";
+            loadingText.innerText = "⏳ Pobieranie zdjęcia...";
+            loadingText.style.cssText = `
+                position: absolute;
+                font-weight: bold;
+                color: #666;
+                font-size: 14px;
+                z-index: -1;
+            `;
+
             const img = document.createElement("img");
             img.id = "stocksell_large_image";
             img.style.cssText = `
@@ -284,30 +299,112 @@
                 max-height: 600px;
                 object-fit: contain;
                 border-radius: 8px;
+                opacity: 0;
+                transition: opacity 0.2s;
             `;
-            
+
+            overlay.appendChild(loadingText);
             overlay.appendChild(img);
             document.body.appendChild(overlay);
         }
 
         const thumbs = document.querySelectorAll("img.img_thumb:not([data-hover-added])");
-        
+
         thumbs.forEach(thumb => {
             thumb.setAttribute("data-hover-added", "true");
-            
+
             thumb.addEventListener("mouseenter", function() {
+                const tr = this.closest("tr");
+                if (!tr) return;
+
+                // Ignorujemy Empik całkowicie, łapiemy tylko Allegro i Erli
+                const linkEl = tr.querySelector('a[href*="allegro.pl/oferta/"], a[href*="code=erli"]');
+                if (!linkEl) return;
+
                 const overlay = document.getElementById("stocksell_large_image_overlay");
                 const largeImg = document.getElementById("stocksell_large_image");
-                
-                let imgSrc = this.getAttribute("data-src") || this.src;
-                imgSrc = imgSrc.replace(/\/\d+\/\d+\.([a-zA-Z]+)/, '/800/800.$1'); 
+                const loadingText = document.getElementById("stocksell_image_loading");
 
-                largeImg.src = imgSrc;
-                overlay.style.display = "block";
+                largeImg.onerror = null;
+                largeImg.onload = null;
+                largeImg.style.opacity = "0";
+                largeImg.src = "";
+                loadingText.innerText = "⏳ Pobieranie zdjęcia...";
+                loadingText.style.display = "block";
+                overlay.style.display = "flex";
+
+                const safeThumbUrl = this.getAttribute("data-src") || this.src;
+
+                const applyImage = (primaryUrl) => {
+                    largeImg.onerror = function() {
+                        if (largeImg.src !== safeThumbUrl) {
+                            largeImg.src = safeThumbUrl;
+                        } else {
+                            loadingText.innerText = "❌ Brak obrazka";
+                            largeImg.onerror = null;
+                        }
+                    };
+
+                    largeImg.onload = function() {
+                        largeImg.style.opacity = "1";
+                        loadingText.style.display = "none";
+                    };
+
+                    largeImg.src = primaryUrl;
+                };
+
+                const originalUrl = linkEl.href;
+                let fetchUrl = originalUrl;
+
+                // ERLI -> Transformacja na link do Allegro
+                if (originalUrl.includes('code=erli')) {
+                    const erliIdMatch = originalUrl.match(/outer_item_id=([^&]+)/);
+                    const erliId = (erliIdMatch && erliIdMatch[1]) ? erliIdMatch[1] : linkEl.innerText.trim();
+                    fetchUrl = `https://allegro.pl/oferta/${erliId}`;
+                }
+
+                if (marketplaceImageCache.has(originalUrl)) {
+                    applyImage(marketplaceImageCache.get(originalUrl));
+                } else {
+                    GM_xmlhttpRequest({
+                        method: "GET",
+                        url: fetchUrl,
+                        headers: {
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                        },
+                        onload: function(res) {
+                            let imgUrl = null;
+                            const ogMatch = res.responseText.match(/<meta\s+(?:property|name)="og:image"\s+content="([^"]+)"/i);
+
+                            if (ogMatch && ogMatch[1] && !ogMatch[1].includes('empik_logo')) {
+                                imgUrl = ogMatch[1];
+                                if (imgUrl.includes('allegroimg')) {
+                                    imgUrl = imgUrl.replace(/\/s\d+\//, '/original/');
+                                }
+                            }
+
+                            if (imgUrl) {
+                                marketplaceImageCache.set(originalUrl, imgUrl);
+                                applyImage(imgUrl);
+                            } else {
+                                applyImage(safeThumbUrl);
+                            }
+                        },
+                        onerror: function() {
+                            applyImage(safeThumbUrl);
+                        }
+                    });
+                }
             });
-            
+
             thumb.addEventListener("mouseleave", function() {
-                document.getElementById("stocksell_large_image_overlay").style.display = "none";
+                const overlay = document.getElementById("stocksell_large_image_overlay");
+                if (overlay) {
+                    overlay.style.display = "none";
+                    const largeImg = document.getElementById("stocksell_large_image");
+                    largeImg.onerror = null;
+                    largeImg.onload = null;
+                }
             });
         });
     }
