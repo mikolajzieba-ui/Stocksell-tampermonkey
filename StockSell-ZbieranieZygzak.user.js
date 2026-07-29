@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         StockSell - Zygzak
 // @namespace    http://tampermonkey.net/
-// @version      1.12
-// @description  Sortuje zygzakiem. Regały 6-10 od tyłu (10->6). Obsługuje regały X. Nie działa w DOK. Koloruje litery. Poprawiony auto-focus w Konsolidowaniu (agresywny).
+// @version      1.13
+// @description  Sortuje zygzakiem. Regały W i Z od 10->0. Reszta 6-10 od tyłu (10->6). Obsługuje X. Nie działa w DOK. Koloruje litery. Agresywny auto-focus w matching.
 // @author       Twój Profil
 // @match        *://*.stocksell.io/*
 // @grant        none
@@ -98,12 +98,27 @@
 
         let step = number;
 
-        if (number === 5.5) {
-            step = 6; 
-        } else if (number >= 6 && number <= 10) {
-            step = 17 - number;
-        } else if (number > 10) {
-            step = number + 1;
+        // MATEMATYKA KROKÓW Z NOWYM WYJĄTKIEM DLA 'W' i 'Z'
+        if (group === 9) { 
+            // SPECJALNA LOGIKA DLA REGAŁÓW W i Z (Zawsze w dół od 10 do 0)
+            if (number >= 6 && number <= 10) {
+                step = 10 - number; // 10->0, 9->1, 8->2, 7->3, 6->4
+            } else if (number === 5.5) {
+                step = 5; // Regał X wewnątrz W/Z
+            } else if (number >= 0 && number <= 5) {
+                step = 11 - number; // 5->6, 4->7, 3->8, 2->9, 1->10, 0->11
+            } else {
+                step = number + 10; 
+            }
+        } else {
+            // STANDARDOWA LOGIKA DLA POZOSTAŁYCH REGAŁÓW
+            if (number === 5.5) {
+                step = 6; 
+            } else if (number >= 6 && number <= 10) {
+                step = 17 - number; // 10->7, 9->8...
+            } else if (number > 10) {
+                step = number + 1;
+            }
         }
 
         const sideOrder = (step % 2 === 0) ? side : (1 - side);
@@ -175,13 +190,11 @@
         }
     }
 
-    // [NOWOŚĆ] Agresywna obrona focusu. Jeśli pole traci focus, natychmiast go przywracamy.
+    // Agresywna obrona focusu. Jeśli pole traci focus, natychmiast go przywracamy.
     document.addEventListener('focusout', function(e) {
         if (isKonsolidacja()) {
             const input = getScanInput();
-            // Jeśli element, który właśnie stracił focus, to nasz input...
             if (e.target === input) {
-                // ...wepchnij kursor z powrotem w ułamku sekundy
                 setTimeout(forceFocus, 50); 
             }
         }
