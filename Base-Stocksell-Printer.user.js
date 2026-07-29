@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Stocksell Printer
 // @namespace    stocksell
-// @version      2.50
+// @version      2.51
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -780,8 +780,8 @@
     initPrinter();
     initAutoRedirectWatcher();
 
-    // Automatyczne odświeżanie arkusza zwrotów co 5 minut (300 000 ms)
-    setInterval(preloadReturnsSheet, 5 * 60 * 1000);
+    // Automatyczne odświeżanie arkusza zwrotów co 1 minutę
+    setInterval(preloadReturnsSheet, 1 * 60 * 1000);
 
     setInterval(() => {
         addButton();
