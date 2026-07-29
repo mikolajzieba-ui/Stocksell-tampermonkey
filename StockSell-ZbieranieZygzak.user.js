@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         StockSell - Zbieranie Zygzak
+// @name         StockSell - Zygzak
 // @namespace    http://tampermonkey.net/
-// @version      1.5
-// @description  Sortuje produkty A0->B0... Wyszarzone na dół. Obsługuje regały X. Nie działa w Strefie DOK.
+// @version      1.7
+// @description  Sortuje zygzakiem. Regały 6-10 od tyłu (10->6). Obsługuje regały X. Nie działa w DOK.
 // @author       Twój Profil
 // @match        *://*.stocksell.io/*
 // @grant        none
@@ -59,7 +59,7 @@
         const rack = match[1];
         const numberText = match[2];
 
-        // Jeśli to regał X, dajemy mu wartość 5.5, żeby wpadł między 5 i 6
+        // Jeśli to regał X, w systemie traktujemy go jako numer 5.5
         const number = (numberText === 'X') ? 5.5 : parseInt(numberText, 10);
 
         if (!rackMap[rack]) return [999, 999, 999];
@@ -67,24 +67,32 @@
         const group = rackMap[rack].group;
         const side = rackMap[rack].side;
 
-        // Przeliczenie numeru na "logiczny rząd", aby zachować płynny zygzak po dodaniu rzędu X
-        let logicalRow = number;
+        // MATEMATYKA KROKÓW (STEPS): Mapujemy fizyczne numery regałów na kolejność odwiedzania
+        let step = number;
+
         if (number === 5.5) {
-            logicalRow = 6;
-        } else if (number >= 6) {
-            logicalRow = number + 1;
+            step = 6; // Regał X następuje zaraz po regale 5 (krok 6)
+        } else if (number >= 6 && number <= 10) {
+            // Odwracamy kolejność dla regałów 6-10.
+            // 10 staje się krokiem 7, 9 to krok 8, ..., 6 to krok 11.
+            step = 17 - number;
+        } else if (number > 10) {
+            // Od regału 11 idziemy znowu normalnie, przesuwając numerację o "oczko" z powodu regału X
+            step = number + 1;
         }
 
-        const sideOrder = (logicalRow % 2 === 0) ? side : (1 - side);
+        // Logika zygzaka oparta na "kroku" wyliczanym wyżej
+        const sideOrder = (step % 2 === 0) ? side : (1 - side);
 
-        return [group, number, sideOrder];
+        // Zamiast zwracać fizyczny "number", zwracamy wyliczony "step", żeby wtyczka posortowała to tak jak idzie człowiek
+        return [group, step, sideOrder];
     }
 
     // 4. Funkcja porównująca (Sortowanie)
     function compareKeys(key1, key2) {
-        if (key1[0] !== key2[0]) return key1[0] - key2[0];
-        if (key1[1] !== key2[1]) return key1[1] - key2[1];
-        return key1[2] - key2[2];
+        if (key1[0] !== key2[0]) return key1[0] - key2[0]; // Priorytet 1: Grupa (np. A/B)
+        if (key1[1] !== key2[1]) return key1[1] - key2[1]; // Priorytet 2: Krok w głąb alejki (uwzględnia skok 10->6)
+        return key1[2] - key2[2];                          // Priorytet 3: Strona (Lewa / Prawa)
     }
 
     // 5. Główny silnik sortujący
@@ -97,11 +105,10 @@
 
         // --- BLOKADA DLA STREFY DOK ---
         if (isStrefaDok()) {
-            // Jeśli to strefa DOK, przywracamy domyślny wygląd (na wypadek przejścia z innej strefy)
             container.style.display = '';
             container.style.flexDirection = '';
             products.forEach(p => p.style.order = '');
-            return; // Kończymy działanie funkcji
+            return;
         }
         // -------------------------------
 
@@ -141,5 +148,27 @@
     });
 
     observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+
+    // 7. Siatka bezpieczeństwa (Fallback dla SPA) - NOWOŚĆ W V1.7
+    // Upewnia się, że wejście na widok przez menu bez przeładowania strony posortuje listę
+    setInterval(() => {
+        if (isStrefaDok()) return;
+
+        const products = document.querySelectorAll('.product');
+        if (products.length === 0) return;
+
+        // Szukamy czy jest jakiś produkt, który nie został jeszcze posortowany (nie ma stylu 'order')
+        let needsSort = false;
+        for(let p of products) {
+            if(!p.style.order) {
+                needsSort = true;
+                break;
+            }
+        }
+
+        if (needsSort) {
+            sortProducts();
+        }
+    }, 1000);
 
 })();
