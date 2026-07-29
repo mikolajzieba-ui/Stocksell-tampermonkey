@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         StockSell - Zygzak
 // @namespace    http://tampermonkey.net/
-// @version      1.8
-// @description  Sortuje zygzakiem. Regały 6-10 od tyłu (10->6). Obsługuje regały X. Nie działa w DOK. Koloruje litery (niebieski/zielony).
+// @version      1.9
+// @description  Sortuje zygzakiem. Regały 6-10 od tyłu (10->6). Obsługuje regały X. Nie działa w DOK. Koloruje litery (ciemny pomarańczowy/ciemny zielony).
 // @author       Twój Profil
 // @match        *://*.stocksell.io/*
 // @grant        none
@@ -38,7 +38,7 @@
         return false;
     }
 
-    // 3. NOWOŚĆ: Funkcja kolorująca pierwszą literę regału
+    // 3. Funkcja kolorująca pierwszą literę regału
     function colorizeElement(el) {
         // Zabezpieczenie przed ponownym kolorowaniem tego samego elementu (żeby nie tworzyć nieskończonych pętli)
         if (el.dataset.colorized) return;
@@ -58,9 +58,9 @@
             const restOfText = match[3];
             let color = '';
             
-            // side 0 (A, C, E...) -> niebieski, side 1 (B, D, F...) -> zielony
+            // side 0 (A, C, E...) -> ciemny pomarańczowy, side 1 (B, D, F...) -> ciemny zielony
             if (rackMap[rack]) {
-                color = rackMap[rack].side === 0 ? '#2196F3' : '#4CAF50'; 
+                color = rackMap[rack].side === 0 ? '#d84315' : '#1b5e20'; 
             }
             
             if (color) {
