@@ -1,13 +1,15 @@
 // ==UserScript==
 // @name         BaseLinker Stocksell Printer
 // @namespace    stocksell
-// @version      2.46
+// @version      2.48
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @connect      script.google.com
 // @connect      script.googleusercontent.com
+// @connect      docs.google.com
+// @connect      googleusercontent.com
 // @connect      localhost
 // @connect      127.0.0.1
 // @connect      allegro.pl
@@ -29,9 +31,125 @@
 
     const productCache = new Map();
     const marketplaceImageCache = new Map();
+    const returnsCache = new Map(); // Pamięć na arkusz Google
 
     //////////////////////////////////////////////////////
-    // CACHE SHEETS
+    // ARKUSZ ZWROTÓW (OBSŁUGA "BRAK ZWROTÓW")
+    //////////////////////////////////////////////////////
+    function parseCSVLine(line) {
+        let cols = [];
+        let inQuotes = false;
+        let col = '';
+        for (let i = 0; i < line.length; i++) {
+            let char = line[i];
+            if (char === '"' && line[i+1] === '"') {
+                col += '"';
+                i++;
+            } else if (char === '"') {
+                inQuotes = !inQuotes;
+            } else if (char === ',' && !inQuotes) {
+                cols.push(col);
+                col = '';
+            } else {
+                col += char;
+            }
+        }
+        cols.push(col);
+        return cols;
+    }
+
+    function preloadReturnsSheet() {
+        const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1rqO5x4HGSwzeYYGypdjMBlEllaUvxiGx8e8KQB5g2-E/export?format=csv&gid=1026354002";
+
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: SHEET_CSV_URL,
+            onload: function(res) {
+                if (res.status === 200) {
+                    const lines = res.responseText.split('\n');
+                    for (let i = 1; i < lines.length; i++) {
+                        const cols = parseCSVLine(lines[i]);
+                        if (cols.length >= 3) {
+                            const trackNum = cols[1] ? cols[1].trim() : ''; // Kolumna B
+                            const orderId = cols[2] ? cols[2].trim() : '';  // Kolumna C
+                            if (trackNum && orderId) {
+                                returnsCache.set(trackNum, orderId);
+                            }
+                        }
+                    }
+                    console.log(`[RETURNS] Pobrano ${returnsCache.size} numerów paczek do zamiany z Google Sheets.`);
+                } else {
+                    console.error("[RETURNS] Nie udało się pobrać arkusza zwrotów. Status:", res.status);
+                }
+            },
+            onerror: function(err) {
+                console.error("[RETURNS] Błąd sieciowy podczas pobierania arkusza:", err);
+            }
+        });
+    }
+
+    function initAutoRedirectWatcher() {
+        let lastProcessedSearch = "";
+
+        setInterval(() => {
+            // Uruchamiamy tylko na stronie zwrotów
+            if (!window.location.href.includes("orders_returns")) return;
+
+            let searchVal = "";
+
+            // Odczytujemy szukaną frazę z "hasha" URL, który generuje BaseLinker
+            if (window.location.hash.includes("search:")) {
+                searchVal = window.location.hash.split("search:")[1];
+            } else {
+                const urlParams = new URLSearchParams(window.location.search);
+                searchVal = urlParams.get('search');
+            }
+
+            if (searchVal) searchVal = decodeURIComponent(searchVal).trim();
+
+            if (searchVal && searchVal !== lastProcessedSearch) {
+
+                // Szukamy tekstu o braku wyników
+                const emptyStates = Array.from(document.querySelectorAll("strong, h6, .empty-states-text-center"));
+                const isNoResults = emptyStates.some(el => el.innerText.includes("Brak zwrotów do wyświetlenia"));
+
+                if (isNoResults) {
+                    console.log(`[AUTO-REDIRECT] Potwierdzono komunikat "Brak zwrotów" dla wyszukiwania: "${searchVal}"`);
+
+                    if (returnsCache.has(searchVal)) {
+                        const targetOrderId = returnsCache.get(searchVal);
+                        lastProcessedSearch = targetOrderId; // Blokada przed pętlą
+
+                        console.log(`[AUTO-REDIRECT] Znalazłem ID w arkuszu! Podmieniam ${searchVal} na -> ${targetOrderId}`);
+
+                        const globalSearchInput = document.getElementById("top_search_input");
+                        if (globalSearchInput) {
+                            globalSearchInput.value = targetOrderId;
+                            globalSearchInput.dispatchEvent(new Event('input', { bubbles: true }));
+                            globalSearchInput.dispatchEvent(new Event('change', { bubbles: true }));
+
+                            const searchIcon = document.querySelector("#quick_search .search-icon");
+                            if (searchIcon) {
+                                console.log("[AUTO-REDIRECT] Klikam lupkę wyszukiwania...");
+                                searchIcon.click();
+                            } else {
+                                console.log("[AUTO-REDIRECT] Brak lupki, wciskam twardo ENTER...");
+                                globalSearchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+                            }
+                        } else {
+                            console.error("[AUTO-REDIRECT] BŁĄD: Nie znalazłem elementu pola wyszukiwania (#top_search_input)");
+                        }
+                    } else {
+                        console.log(`[AUTO-REDIRECT] Numeru "${searchVal}" niestety nie ma w podłączonym arkuszu Google.`);
+                        lastProcessedSearch = searchVal;
+                    }
+                }
+            }
+        }, 1000);
+    }
+
+    //////////////////////////////////////////////////////
+    // CACHE SHEETS (PRODUKTY)
     //////////////////////////////////////////////////////
     function preloadProducts() {
         const CACHE_KEY = "stocksell_products_v1";
@@ -303,7 +421,6 @@
     function createDymoXml(title, code) {
         const safeTitle = title.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-        // Przełamujemy tytuł na max 3 linie (ok. 38 znaków na linię), używając encji HTML dla nowej linii (&#10;)
         const wrappedTitle = wrapTextForDymo(safeTitle, 38);
         const fCode = formatCode(code);
 
@@ -426,7 +543,6 @@
         return Array.from(bytes).map(b => "_" + b.toString(16).padStart(2, "0").toUpperCase()).join("");
     }
 
-    // Funkcja na twardo wstawiająca nową linię po określonej liczbie znaków (dla DYMO)
     function wrapTextForDymo(text, maxLength) {
         if (!text) return "";
         let words = text.split(' ');
@@ -443,7 +559,6 @@
         }
         if (currentLine.trim() !== '') lines.push(currentLine.trim());
 
-        // Zwracamy maksymalnie 3 linijki, łącząc je encją nowej linii
         return lines.slice(0, 3).join('&#10;');
     }
 
@@ -659,7 +774,9 @@
     // START
     //////////////////////////////////////////////////////
     preloadProducts();
+    preloadReturnsSheet();
     initPrinter();
+    initAutoRedirectWatcher();
     setInterval(() => {
         addButton();
         initImageEnlarger();
