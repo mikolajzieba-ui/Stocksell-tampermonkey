@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         StockSell - Zygzak
 // @namespace    http://tampermonkey.net/
-// @version      1.10
-// @description  Sortuje zygzakiem. Regały 6-10 od tyłu (10->6). Obsługuje regały X. Nie działa w DOK. Koloruje litery. Wymusza focus skanera na Konsolidacji.
+// @version      1.11
+// @description  Sortuje zygzakiem. Regały 6-10 od tyłu (10->6). Obsługuje regały X. Nie działa w DOK. Koloruje litery. Poprawiony auto-focus w Konsolidowaniu (matching).
 // @author       Twój Profil
 // @match        *://*.stocksell.io/*
 // @grant        none
@@ -155,16 +155,18 @@
     }
 
     // ==========================================
-    // CZĘŚĆ 2: AUTO-FOCUS SKANERA (KONSOLIDACJA)
+    // CZĘŚĆ 2: AUTO-FOCUS SKANERA (KONSOLIDACJA/MATCHING)
     // ==========================================
 
     function isKonsolidacja() {
-        return window.location.href.toLowerCase().includes('consolidation') || 
-               (document.querySelector('mat-card-title') && document.querySelector('mat-card-title').textContent.toLowerCase().includes('konsolidacja'));
+        const url = window.location.href.toLowerCase();
+        // Na screenie widać adres /matching, więc sprawdzamy to słowo (lub consolidation na zapas)
+        return url.includes('matching') || url.includes('consolidation');
     }
 
     function getScanInput() {
-        return document.querySelector('input[placeholder*="Kod"], input[type="text"]');
+        // Łapiemy input Angulara z klasy mat-input-element
+        return document.querySelector('input.mat-input-element');
     }
 
     function forceFocus() {
