@@ -220,7 +220,7 @@
                         const data = JSON.parse(res.responseText);
                         console.log("[ZEBRA DEBUG] Odpowiedź z portu 9100:", data);
 
-                        const printer = data.printer.find(p => p.name && (p.name.includes("ZD411") || p.name.includes("GK420")));
+                        const printer = data.printer.find(p => p.name && (p.name.includes("ZD411") || p.name.includes("asdasd")));
 
                         if (!printer) {
                             console.log("[ZEBRA DEBUG] Brak pasującej drukarki Zebra w zwróconym JSON.");
