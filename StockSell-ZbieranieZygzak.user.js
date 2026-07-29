@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         StockSell - Zygzak
 // @namespace    http://tampermonkey.net/
-// @version      1.11
-// @description  Sortuje zygzakiem. Regały 6-10 od tyłu (10->6). Obsługuje regały X. Nie działa w DOK. Koloruje litery. Poprawiony auto-focus w Konsolidowaniu (matching).
+// @version      1.12
+// @description  Sortuje zygzakiem. Regały 6-10 od tyłu (10->6). Obsługuje regały X. Nie działa w DOK. Koloruje litery. Poprawiony auto-focus w Konsolidowaniu (agresywny).
 // @author       Twój Profil
 // @match        *://*.stocksell.io/*
 // @grant        none
@@ -160,12 +160,10 @@
 
     function isKonsolidacja() {
         const url = window.location.href.toLowerCase();
-        // Na screenie widać adres /matching, więc sprawdzamy to słowo (lub consolidation na zapas)
         return url.includes('matching') || url.includes('consolidation');
     }
 
     function getScanInput() {
-        // Łapiemy input Angulara z klasy mat-input-element
         return document.querySelector('input.mat-input-element');
     }
 
@@ -177,10 +175,21 @@
         }
     }
 
+    // [NOWOŚĆ] Agresywna obrona focusu. Jeśli pole traci focus, natychmiast go przywracamy.
+    document.addEventListener('focusout', function(e) {
+        if (isKonsolidacja()) {
+            const input = getScanInput();
+            // Jeśli element, który właśnie stracił focus, to nasz input...
+            if (e.target === input) {
+                // ...wepchnij kursor z powrotem w ułamku sekundy
+                setTimeout(forceFocus, 50); 
+            }
+        }
+    });
+
     // Reakcja na zeskanowanie (Enter z Zebry)
     document.addEventListener('keydown', function(e) {
         if (isKonsolidacja() && e.key === 'Enter') {
-            // Ponawiamy próby wymuszenia focusu, aby wstrzelić się po przeładowaniu danych przez serwer
             setTimeout(forceFocus, 100);
             setTimeout(forceFocus, 300);
             setTimeout(forceFocus, 600); 
@@ -212,14 +221,12 @@
 
     observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
 
-    // Siatka bezpieczeństwa (Fallback dla przełączania zakładek w SPA bez odświeżania)
+    // Zwiększona częstotliwość siatki bezpieczeństwa (sprawdza co 500ms zamiast 1000ms)
     setInterval(() => {
-        // Wymuszenie focusu jeśli weszliśmy na Konsolidację
         if (isKonsolidacja()) {
             forceFocus();
         }
 
-        // Sprawdzenie i wymuszenie sortowania w Pickowaniu
         if (isStrefaDok()) return; 
 
         const products = document.querySelectorAll('.product');
@@ -236,6 +243,6 @@
         if (needsSort) {
             sortProducts();
         }
-    }, 1000);
+    }, 500);
 
 })();
