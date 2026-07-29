@@ -6,6 +6,8 @@
 // @author       Twój Profil
 // @match        *://*.stocksell.io/*
 // @grant        none
+// @downloadURL  https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/StockSell-ZbieranieZygzak.user.js
+// @updateURL    https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/StockSell-ZbieranieZygzak.user.js
 // ==/UserScript==
 
 (function() {
