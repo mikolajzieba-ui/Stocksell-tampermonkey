@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         StockSell - Zygzak
 // @namespace    http://tampermonkey.net/
-// @version      1.13
-// @description  Sortuje zygzakiem. Regały W i Z od 10->0. Reszta 6-10 od tyłu (10->6). Obsługuje X. Nie działa w DOK. Koloruje litery. Agresywny auto-focus w matching.
+// @version      1.14
+// @description  Sortuje zygzakiem. Ukrywa efekt mignięcia (przeskakiwania) po zamknięciu okienka. Regały W i Z od 10->0. Obsługuje X. Nie działa w DOK. Koloruje litery. Agresywny focus.
 // @author       Twój Profil
 // @match        *://*.stocksell.io/*
 // @grant        none
@@ -12,6 +12,30 @@
 
 (function() {
     'use strict';
+
+    // ==========================================
+    // CZĘŚĆ 0: CSS ANTI-FLICKER (Ukrywanie mignięcia)
+    // ==========================================
+    function injectAntiFlickerStyle() {
+        if (document.getElementById('zigzag-styles')) return;
+        const style = document.createElement('style');
+        style.id = 'zigzag-styles';
+        style.innerHTML = `
+            /* Animacja bezpieczeństwa: ukrywa listę na 0.4s dopóki nie zostanie posortowana. 
+               Jeśli z jakiegoś powodu skrypt nie zadziała, po 0.4s lista pokaże się sama. */
+            @keyframes antiFlicker {
+                0% { opacity: 0; }
+                99% { opacity: 0; }
+                100% { opacity: 1; }
+            }
+            .products:not(.zigzag-ready) {
+                animation: antiFlicker 0.4s forwards !important;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+    
+    injectAntiFlickerStyle();
 
     // ==========================================
     // CZĘŚĆ 1: ZYGZAK I SORTOWANIE (PICKOWANIE)
@@ -136,12 +160,16 @@
         if (!container) return;
 
         const products = Array.from(container.querySelectorAll('.product'));
-        if (products.length === 0) return;
+        if (products.length === 0) {
+            container.classList.add('zigzag-ready');
+            return;
+        }
 
         if (isStrefaDok()) {
             container.style.display = '';
             container.style.flexDirection = '';
             products.forEach(p => p.style.order = '');
+            container.classList.add('zigzag-ready'); // Ujawnia zablokowaną listę natychmiast
             return;
         }
 
@@ -167,6 +195,9 @@
         itemsWithKeys.forEach((item, index) => {
             item.element.style.order = index + 1;
         });
+
+        // Po zakończeniu sortowania dodajemy klasę zdejmującą przezroczystość
+        container.classList.add('zigzag-ready');
     }
 
     // ==========================================
@@ -190,7 +221,7 @@
         }
     }
 
-    // Agresywna obrona focusu. Jeśli pole traci focus, natychmiast go przywracamy.
+    // Agresywna obrona focusu
     document.addEventListener('focusout', function(e) {
         if (isKonsolidacja()) {
             const input = getScanInput();
@@ -200,7 +231,6 @@
         }
     });
 
-    // Reakcja na zeskanowanie (Enter z Zebry)
     document.addEventListener('keydown', function(e) {
         if (isKonsolidacja() && e.key === 'Enter') {
             setTimeout(forceFocus, 100);
@@ -217,24 +247,40 @@
     let mainTimeout;
     const observer = new MutationObserver((mutations) => {
         let shouldUpdate = false;
+        let shouldHide = false;
+        
         for (let mutation of mutations) {
-            if (mutation.addedNodes.length > 0 || mutation.removedNodes.length > 0 || mutation.type === 'attributes') {
+            if (mutation.addedNodes.length > 0 || mutation.removedNodes.length > 0) {
                 shouldUpdate = true;
-                break;
+                // Jeśli dodano nowe elementy, tymczasowo zdejmij klasę by ukryć mignięcie
+                const container = document.querySelector('.products');
+                if (container && mutation.addedNodes.length > 0) {
+                    shouldHide = true;
+                }
+            }
+            if (mutation.type === 'attributes') {
+                shouldUpdate = true;
             }
         }
+        
         if (shouldUpdate) {
+            const container = document.querySelector('.products');
+            if (shouldHide && container) {
+                container.classList.remove('zigzag-ready');
+            }
+            
             clearTimeout(mainTimeout);
+            // Drastycznie zmniejszone opóźnienie z 400ms na 50ms (szybsza reakcja)
             mainTimeout = setTimeout(() => {
                 sortProducts();
                 if (isKonsolidacja()) forceFocus();
-            }, 400);
+            }, 50);
         }
     });
 
     observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
 
-    // Zwiększona częstotliwość siatki bezpieczeństwa (sprawdza co 500ms zamiast 1000ms)
+    // Siatka bezpieczeństwa (Fallback)
     setInterval(() => {
         if (isKonsolidacja()) {
             forceFocus();
@@ -242,8 +288,14 @@
 
         if (isStrefaDok()) return; 
 
+        const container = document.querySelector('.products');
         const products = document.querySelectorAll('.product');
-        if (products.length === 0) return;
+        if (products.length === 0) {
+            if (container && !container.classList.contains('zigzag-ready')) {
+                container.classList.add('zigzag-ready');
+            }
+            return;
+        }
 
         let needsSort = false;
         for(let p of products) {
@@ -255,6 +307,8 @@
 
         if (needsSort) {
             sortProducts();
+        } else if (container && !container.classList.contains('zigzag-ready')) {
+            container.classList.add('zigzag-ready');
         }
     }, 500);
 
