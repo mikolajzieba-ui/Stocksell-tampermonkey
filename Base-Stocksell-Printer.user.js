@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Stocksell Printer
 // @namespace    stocksell
-// @version      2.48
+// @version      2.50
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -59,13 +59,15 @@
     }
 
     function preloadReturnsSheet() {
-        const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1rqO5x4HGSwzeYYGypdjMBlEllaUvxiGx8e8KQB5g2-E/export?format=csv&gid=1026354002";
+        // Dodany parametr zapobiegający cache'owaniu przez przeglądarkę (wymusza pobranie najnowszej wersji)
+        const SHEET_CSV_URL = `https://docs.google.com/spreadsheets/d/1rqO5x4HGSwzeYYGypdjMBlEllaUvxiGx8e8KQB5g2-E/export?format=csv&gid=1026354002&t=${Date.now()}`;
 
         GM_xmlhttpRequest({
             method: "GET",
             url: SHEET_CSV_URL,
             onload: function(res) {
                 if (res.status === 200) {
+                    returnsCache.clear(); // Czyszczenie starej pamięci przed wgraniem nowych danych
                     const lines = res.responseText.split('\n');
                     for (let i = 1; i < lines.length; i++) {
                         const cols = parseCSVLine(lines[i]);
@@ -77,7 +79,7 @@
                             }
                         }
                     }
-                    console.log(`[RETURNS] Pobrano ${returnsCache.size} numerów paczek do zamiany z Google Sheets.`);
+                    console.log(`[RETURNS] Zaktualizowano arkusz w tle. W pamięci jest teraz ${returnsCache.size} numerów.`);
                 } else {
                     console.error("[RETURNS] Nie udało się pobrać arkusza zwrotów. Status:", res.status);
                 }
@@ -99,7 +101,7 @@
 
             // Odczytujemy szukaną frazę z "hasha" URL, który generuje BaseLinker
             if (window.location.hash.includes("search:")) {
-                searchVal = window.location.hash.split("search:")[1];
+                searchVal = window.location.hash.split("search:")[1].split("&")[0].split("#")[0];
             } else {
                 const urlParams = new URLSearchParams(window.location.search);
                 searchVal = urlParams.get('search');
@@ -218,7 +220,7 @@
                         const data = JSON.parse(res.responseText);
                         console.log("[ZEBRA DEBUG] Odpowiedź z portu 9100:", data);
 
-                        const printer = data.printer.find(p => p.name && (p.name.includes("ZD411") || p.name.includes("asdasd")));
+                        const printer = data.printer.find(p => p.name && (p.name.includes("ZD411") || p.name.includes("GK420")));
 
                         if (!printer) {
                             console.log("[ZEBRA DEBUG] Brak pasującej drukarki Zebra w zwróconym JSON.");
@@ -777,6 +779,10 @@
     preloadReturnsSheet();
     initPrinter();
     initAutoRedirectWatcher();
+
+    // Automatyczne odświeżanie arkusza zwrotów co 5 minut (300 000 ms)
+    setInterval(preloadReturnsSheet, 5 * 60 * 1000);
+
     setInterval(() => {
         addButton();
         initImageEnlarger();
