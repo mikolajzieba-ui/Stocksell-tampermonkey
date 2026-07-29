@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         StockSell - Zygzak
 // @namespace    http://tampermonkey.net/
-// @version      1.7
-// @description  Sortuje zygzakiem. Regały 6-10 od tyłu (10->6). Obsługuje regały X. Nie działa w DOK.
+// @version      1.8
+// @description  Sortuje zygzakiem. Regały 6-10 od tyłu (10->6). Obsługuje regały X. Nie działa w DOK. Koloruje litery (niebieski/zielony).
 // @author       Twój Profil
 // @match        *://*.stocksell.io/*
 // @grant        none
@@ -38,7 +38,41 @@
         return false;
     }
 
-    // 3. Funkcja analizująca lokalizację i sprawdzająca status
+    // 3. NOWOŚĆ: Funkcja kolorująca pierwszą literę regału
+    function colorizeElement(el) {
+        // Zabezpieczenie przed ponownym kolorowaniem tego samego elementu (żeby nie tworzyć nieskończonych pętli)
+        if (el.dataset.colorized) return;
+        
+        const text = el.textContent;
+        const parts = text.split('/');
+        
+        const relevantPart = parts.length > 1 ? parts[parts.length - 1] : text;
+        const prefix = parts.length > 1 ? parts.slice(0, -1).join('/') + '/' : '';
+        
+        // Szukamy spacji (jeśli są) oraz pierwszej dużej litery
+        const match = relevantPart.match(/^(\s*)([A-Z])(.*)/);
+        
+        if (match) {
+            const spaces = match[1];
+            const rack = match[2];
+            const restOfText = match[3];
+            let color = '';
+            
+            // side 0 (A, C, E...) -> niebieski, side 1 (B, D, F...) -> zielony
+            if (rackMap[rack]) {
+                color = rackMap[rack].side === 0 ? '#2196F3' : '#4CAF50'; 
+            }
+            
+            if (color) {
+                // Wstawiamy samą literę w <span> z odpowiednim kolorem, reszta zostaje bez zmian
+                el.innerHTML = prefix + spaces + `<span style="color: ${color}; font-weight: 900; font-size: 1.15em;">${rack}</span>` + restOfText;
+            }
+        }
+        
+        el.dataset.colorized = 'true';
+    }
+
+    // 4. Funkcja analizująca lokalizację i sprawdzająca status
     function getSortKey(locationString, element) {
         const isDone = element.classList.contains('product-missing') ||
                        element.classList.contains('product-picked') ||
@@ -88,14 +122,14 @@
         return [group, step, sideOrder];
     }
 
-    // 4. Funkcja porównująca (Sortowanie)
+    // 5. Funkcja porównująca (Sortowanie)
     function compareKeys(key1, key2) {
         if (key1[0] !== key2[0]) return key1[0] - key2[0]; // Priorytet 1: Grupa (np. A/B)
         if (key1[1] !== key2[1]) return key1[1] - key2[1]; // Priorytet 2: Krok w głąb alejki (uwzględnia skok 10->6)
         return key1[2] - key2[2];                          // Priorytet 3: Strona (Lewa / Prawa)
     }
 
-    // 5. Główny silnik sortujący
+    // 6. Główny silnik sortujący
     function sortProducts() {
         const container = document.querySelector('.products');
         if (!container) return;
@@ -117,6 +151,13 @@
 
         const itemsWithKeys = products.map(product => {
             const storeEl = product.querySelector('.store-element');
+            
+            // Odpalamy kolorowanie dla każdego z produktów
+            if (storeEl) {
+                colorizeElement(storeEl);
+            }
+            
+            // 'textContent' czyta czysty tekst, więc nie przeszkadzają mu nasze dodane style (kolory)
             const locStr = storeEl ? storeEl.textContent.trim() : '';
             return {
                 element: product,
@@ -131,7 +172,7 @@
         });
     }
 
-    // 6. Nasłuchiwanie na zmiany (MutationObserver)
+    // 7. Nasłuchiwanie na zmiany (MutationObserver)
     let sortTimeout;
     const observer = new MutationObserver((mutations) => {
         let shouldSort = false;
@@ -149,10 +190,10 @@
 
     observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
 
-    // 7. Siatka bezpieczeństwa (Fallback dla SPA) - NOWOŚĆ W V1.7
+    // 8. Siatka bezpieczeństwa (Fallback dla SPA)
     // Upewnia się, że wejście na widok przez menu bez przeładowania strony posortuje listę
     setInterval(() => {
-        if (isStrefaDok()) return;
+        if (isStrefaDok()) return; 
 
         const products = document.querySelectorAll('.product');
         if (products.length === 0) return;
