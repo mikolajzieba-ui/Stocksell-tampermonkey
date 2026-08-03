@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pobieranie opisu z Allegro dla StockSell
 // @namespace    http://tampermonkey.net/
-// @version      10.4
+// @version      10.5
 // @description  Czysty Opis + Wady
 // @match        *://*.stocksell.io/*
 // @match        *://stocksell.io/*
@@ -129,12 +129,12 @@
 
                         link.parentNode.appendChild(ramkaNaOpis);
                     } else {
-                        status.innerText = " ❌ Błąd Allegro (Kod: " + response.status + ")";
+                        status.innerText = " ❌ Błąd Allegro - wejdź na allegro a następnie odśwież stocksell.";
                         status.style.color = "red";
                     }
                 },
                 onerror: function() {
-                    status.innerText = " ❌ Błąd połączenia sieciowego z Allegro.";
+                    status.innerText = " ❌ Błąd Allegro - wejdź na allegro a następnie odśwież stocksell.";
                     status.style.color = "red";
                 }
             });
