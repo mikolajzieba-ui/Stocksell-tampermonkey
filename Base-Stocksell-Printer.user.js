@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Stocksell Printer
 // @namespace    stocksell
-// @version      2.51
+// @version      2.61
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -59,7 +59,6 @@
     }
 
     function preloadReturnsSheet() {
-        // Dodany parametr zapobiegający cache'owaniu przez przeglądarkę (wymusza pobranie najnowszej wersji)
         const SHEET_CSV_URL = `https://docs.google.com/spreadsheets/d/1rqO5x4HGSwzeYYGypdjMBlEllaUvxiGx8e8KQB5g2-E/export?format=csv&gid=1026354002&t=${Date.now()}`;
 
         GM_xmlhttpRequest({
@@ -67,13 +66,13 @@
             url: SHEET_CSV_URL,
             onload: function(res) {
                 if (res.status === 200) {
-                    returnsCache.clear(); // Czyszczenie starej pamięci przed wgraniem nowych danych
+                    returnsCache.clear();
                     const lines = res.responseText.split('\n');
                     for (let i = 1; i < lines.length; i++) {
                         const cols = parseCSVLine(lines[i]);
                         if (cols.length >= 3) {
-                            const trackNum = cols[1] ? cols[1].trim() : ''; // Kolumna B
-                            const orderId = cols[2] ? cols[2].trim() : '';  // Kolumna C
+                            const trackNum = cols[1] ? cols[1].trim() : '';
+                            const orderId = cols[2] ? cols[2].trim() : '';
                             if (trackNum && orderId) {
                                 returnsCache.set(trackNum, orderId);
                             }
@@ -94,12 +93,10 @@
         let lastProcessedSearch = "";
 
         setInterval(() => {
-            // Uruchamiamy tylko na stronie zwrotów
             if (!window.location.href.includes("orders_returns")) return;
 
             let searchVal = "";
 
-            // Odczytujemy szukaną frazę z "hasha" URL, który generuje BaseLinker
             if (window.location.hash.includes("search:")) {
                 searchVal = window.location.hash.split("search:")[1].split("&")[0].split("#")[0];
             } else {
@@ -110,8 +107,6 @@
             if (searchVal) searchVal = decodeURIComponent(searchVal).trim();
 
             if (searchVal && searchVal !== lastProcessedSearch) {
-
-                // Szukamy tekstu o braku wyników
                 const emptyStates = Array.from(document.querySelectorAll("strong, h6, .empty-states-text-center"));
                 const isNoResults = emptyStates.some(el => el.innerText.includes("Brak zwrotów do wyświetlenia"));
 
@@ -120,7 +115,7 @@
 
                     if (returnsCache.has(searchVal)) {
                         const targetOrderId = returnsCache.get(searchVal);
-                        lastProcessedSearch = targetOrderId; // Blokada przed pętlą
+                        lastProcessedSearch = targetOrderId;
 
                         console.log(`[AUTO-REDIRECT] Znalazłem ID w arkuszu! Podmieniam ${searchVal} na -> ${targetOrderId}`);
 
@@ -565,6 +560,53 @@
     }
 
     //////////////////////////////////////////////////////
+    // WYSWIETLANIE KODÓW
+    //////////////////////////////////////////////////////
+    function displayProductCodes() {
+        const productCells = document.querySelectorAll("td.td_product_name");
+
+        productCells.forEach(cell => {
+            // Zabezpieczenie przed dublowaniem kodu
+            if (cell.querySelector('.stocksell-inline-code')) return;
+
+            const textContent = cell.textContent;
+            const sku = extractSku(textContent);
+
+            // Pomijamy jeśli brak SKU lub SKU zawiera "stocksell"
+            if (!sku || sku.toLowerCase().includes("stocksell")) return;
+
+            // Szukamy w cache
+            const product = productCache.get(sku);
+
+            if (product && product.code) {
+                const codeEl = document.createElement("span");
+                codeEl.className = "stocksell-inline-code";
+
+                // Usuwamy spacje z kodu produktu przed jego wyświetleniem
+                const compactCode = String(product.code).replace(/\s+/g, '');
+                codeEl.innerText = compactCode;
+
+                // Stylizacja odpowiadająca niebieskiej plakietce
+                codeEl.style.cssText = `
+                    float: right;
+                    background-color: #4b8bf4;
+                    color: #ffffff;
+                    padding: 4px 12px;
+                    border-radius: 6px;
+                    font-weight: 700;
+                    font-size: 13px;
+                    margin-left: 10px;
+                    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+                    letter-spacing: 0.5px;
+                `;
+
+                // Dodajemy element do komórki td
+                cell.appendChild(codeEl);
+            }
+        });
+    }
+
+    //////////////////////////////////////////////////////
     // PRINT ACTION
     //////////////////////////////////////////////////////
     async function printMissing() {
@@ -786,6 +828,7 @@
     setInterval(() => {
         addButton();
         initImageEnlarger();
+        displayProductCodes();
     }, 1000);
 
 })();
