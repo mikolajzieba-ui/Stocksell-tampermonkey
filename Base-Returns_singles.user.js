@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Base Zwroty jednosztukowe
 // @namespace    stocksell
-// @version      1.1
+// @version      1.2
 // @match        https://panel.baselinker.com/orders_returns*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -207,43 +207,43 @@
 
     function sendToZebra(zpl) {
 
-    GM_xmlhttpRequest({
+        GM_xmlhttpRequest({
 
-        method: "POST",
+            method: "POST",
 
-        url: "http://localhost:9100/write",
+            url: "http://localhost:9100/write",
 
-        headers: {
-            "Content-Type": "application/json"
-        },
+            headers: {
+                "Content-Type": "application/json"
+            },
 
-        data: JSON.stringify({
-            device: zebraDevice,
-            data: zpl
-        }),
+            data: JSON.stringify({
+                device: zebraDevice,
+                data: zpl
+            }),
 
-        onload: function(res) {
+            onload: function(res) {
 
-            console.log(
-                "[ReturnsPrinter] Zebra response:",
-                res.status,
-                res.responseText
-            );
+                console.log(
+                    "[ReturnsPrinter] Zebra response:",
+                    res.status,
+                    res.responseText
+                );
 
-        },
+            },
 
-        onerror: function(err) {
+            onerror: function(err) {
 
-            console.error(
-                "[ReturnsPrinter] Zebra error:",
-                err
-            );
+                console.error(
+                    "[ReturnsPrinter] Zebra error:",
+                    err
+                );
 
-        }
+            }
 
-    });
+        });
 
-}
+    }
 
     function formatCode(code) {
 
@@ -304,179 +304,136 @@
 `;
     }
 
-//////////////////////////////////////////////////////
-// RETURN PROCESSING
-//////////////////////////////////////////////////////
-
-function processReturn() {
-
-    if (!zebraReady){
-        return;
-    }
-   //////////////////////////////////////////////////////
-// POMIŃ ZWROTY DO WERYFIKACJI
-//////////////////////////////////////////////////////
-
-const modalText =
-    document.body.innerText.toLowerCase();
-
-if (
-    modalText.includes('odłóż do weryfikacji')
-    ||
-    modalText.includes('zamówienie jest wielosztukowe')
-) {
-    console.log(
-        '[ReturnsPrinter] Warning detected - skipped'
-);
-
-    return;
-}
-
-//////////////////////////////////////////////////////
-// SKU
-//////////////////////////////////////////////////////
-
-const skuElements =
-    [...document.querySelectorAll(".product-info-text")]
-    .filter(
-        el =>
-            el.textContent.includes("SKU:")
-    );
-
-// drukuj tylko gdy jest dokładnie 1 SKU
-if (skuElements.length !== 1) {
-
-    console.log(
-        "[ReturnsPrinter] Ignored. SKU count:",
-        skuElements.length
-    );
-
-    return;
-}
-
-const skuText =
-    skuElements[0].textContent;
-
-// wyciągnij wszystko pomiędzy "SKU:" a "| Przyjmij do:"
-const sku =
-    skuText
-        .replace(/^SKU:\s*/i, '')
-        .split('|')[0]
-        .trim();
-
-if (!sku) {
-
-    console.warn(
-        "[ReturnsPrinter] Cannot parse SKU:",
-        skuText
-    );
-
-    return;
-}
-
-console.log(
-    "[ReturnsPrinter] SKU:",
-    sku
-);
-
     //////////////////////////////////////////////////////
-    // POMIŃ STOCKSELL
+    // RETURN PROCESSING
     //////////////////////////////////////////////////////
 
-    if (
-        sku.toLowerCase()
-            .includes("stocksell")
-    ) {
+    function processReturn() {
+        if (!zebraReady) {
+            return false; // Drukarka nie jest gotowa, próbuj ponownie (lub zatrzyma się przez limit prób)
+        }
 
-        console.log(
-            "[ReturnsPrinter] Stocksell SKU - skipped"
-        );
+        //////////////////////////////////////////////////////
+        // POMIŃ ZWROTY DO WERYFIKACJI
+        //////////////////////////////////////////////////////
 
-        return;
+        const modalText = document.body.innerText.toLowerCase();
+
+        if (
+            modalText.includes('odłóż do weryfikacji') ||
+            modalText.includes('zamówienie jest wielosztukowe')
+        ) {
+            console.log('[ReturnsPrinter] Warning detected - skipped');
+            return true; // Znaleziono błąd, zatrzymaj sprawdzanie
+        }
+
+        //////////////////////////////////////////////////////
+        // SKU
+        //////////////////////////////////////////////////////
+
+        const skuElements = [...document.querySelectorAll(".product-info-text")]
+            .filter(el => el.textContent.includes("SKU:"));
+
+        // Drukuj tylko gdy jest dokładnie 1 SKU. 
+        // Jeśli jest 0, to widok może się jeszcze ładować -> false
+        // Jeśli jest > 1, to ignorujemy -> true (przerywamy pętlę)
+        if (skuElements.length === 0) {
+            return false; // Brak SKU, czekamy dalej
+        } else if (skuElements.length > 1) {
+            console.log("[ReturnsPrinter] Ignored. SKU count:", skuElements.length);
+            return true;
+        }
+
+        const skuText = skuElements[0].textContent;
+
+        // Wyciągnij wszystko pomiędzy "SKU:" a "| Przyjmij do:"
+        const sku = skuText.replace(/^SKU:\s*/i, '').split('|')[0].trim();
+
+        if (!sku) {
+            console.warn("[ReturnsPrinter] Cannot parse SKU:", skuText);
+            return true; // Przerywamy sprawdzanie
+        }
+
+        console.log("[ReturnsPrinter] SKU:", sku);
+
+        //////////////////////////////////////////////////////
+        // POMIŃ STOCKSELL
+        //////////////////////////////////////////////////////
+
+        if (sku.toLowerCase().includes("stocksell")) {
+            console.log("[ReturnsPrinter] Stocksell SKU - skipped");
+            return true; // Przerywamy sprawdzanie
+        }
+
+        //////////////////////////////////////////////////////
+        // SZUKAJ W CACHE
+        //////////////////////////////////////////////////////
+
+        const product = productCache.get(sku);
+
+        if (!product) {
+            console.warn("[ReturnsPrinter] SKU not found in cache:", sku);
+            return true; // Przerywamy sprawdzanie
+        }
+
+        //////////////////////////////////////////////////////
+        // DRUKUJ
+        //////////////////////////////////////////////////////
+
+        const zpl = createZPL(product.title, product.code);
+        sendToZebra(zpl);
+
+        console.log("[ReturnsPrinter] Printed:", sku);
+
+        return true; // Sukces, wydrukowano, zatrzymaj sprawdzanie
     }
 
     //////////////////////////////////////////////////////
-    // SZUKAJ W CACHE
+    // WATCHER
     //////////////////////////////////////////////////////
 
-    const product =
-        productCache.get(sku);
+    function watchReturns() {
 
-    if (!product) {
+        setInterval(() => {
 
-        console.warn(
-            "[ReturnsPrinter] SKU not found:",
-            sku
-        );
+            const orderLink = document.querySelector('.pick_pack_sale_detail_info a[href*="orders.php"]');
 
-        return;
+            if (!orderLink) return;
+
+            const orderId = orderLink.textContent.trim();
+
+            if (!orderId || orderId === lastOrderId) return;
+
+            lastOrderId = orderId;
+
+            console.log("[ReturnsPrinter] New return detected:", orderId);
+
+            // Mechanizm aktywnego oczekiwania - próbuje co 500ms (łącznie do 3 sekund)
+            let attempts = 0;
+            const maxAttempts = 6;
+            
+            const checkInterval = setInterval(() => {
+                attempts++;
+                
+                const isFinished = processReturn(); 
+                
+                if (isFinished || attempts >= maxAttempts) {
+                    if (!isFinished && attempts >= maxAttempts) {
+                        console.log("[ReturnsPrinter] Timeout reached waiting for SKU or warnings.");
+                    }
+                    clearInterval(checkInterval);
+                }
+            }, 500);
+
+        }, 500);
     }
 
     //////////////////////////////////////////////////////
-    // DRUKUJ
+    // START
     //////////////////////////////////////////////////////
 
-    const zpl =
-        createZPL(
-            product.title,
-            product.code
-        );
-
-    sendToZebra(zpl);
-
-    console.log(
-        "[ReturnsPrinter] Printed:",
-        sku
-    );
-}
-
-//////////////////////////////////////////////////////
-// WATCHER
-//////////////////////////////////////////////////////
-
-function watchReturns() {
-
-    setInterval(() => {
-
-        const orderLink =
-            document.querySelector(
-                '.pick_pack_sale_detail_info a[href*="orders.php"]'
-            );
-
-        if (!orderLink) {
-            return;
-        }
-        const orderId =
-            orderLink.textContent.trim();
-
-        if (!orderId) {
-            return;
-        }
-        if (orderId === lastOrderId) {
-            return;
-        }
-        lastOrderId = orderId;
-
-        console.log(
-            "[ReturnsPrinter] New return:",
-            orderId
-        );
-
-        setTimeout(
-            processReturn,
-            1500
-        );
-
-    }, 500);
-
-}
-
-//////////////////////////////////////////////////////
-// START
-//////////////////////////////////////////////////////
-
-preloadProducts();
-initPrinter();
-watchReturns();
+    preloadProducts();
+    initPrinter();
+    watchReturns();
 
 })();
