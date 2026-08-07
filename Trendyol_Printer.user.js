@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Emergency Scanner (Zebra)
 // @namespace    stocksell-emergency
-// @version      2.5
+// @version      2.8
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -36,8 +36,73 @@
     let refreshBtn = null;
     let historyContainer = null;
 
-    // Pobieranie historii skanów z pamięci przeglądarki (max 10)
+    // Pobieranie historii skanów i wybranego motywu z pamięci przeglądarki
     let recentScans = JSON.parse(GM_getValue("recent_scans_v1", "[]"));
+    let currentTheme = GM_getValue("stocksell_theme", "dark");
+
+    //////////////////////////////////////////////////////
+    // STYLE CSS (ZMIENNE DLA MOTYWÓW)
+    //////////////////////////////////////////////////////
+    function injectStyles() {
+        if (document.getElementById("stocksell-emergency-styles")) return;
+
+        const style = document.createElement("style");
+        style.id = "stocksell-emergency-styles";
+        style.innerHTML = `
+            #stocksell-emergency-scanner-wrapper[data-theme="dark"] {
+                --bg-panel: #2b3035;
+                --text-main: #f9fafb;
+                --text-muted: #9ca3af;
+                --text-sub: #d1d5db;
+                --border-color: #374151;
+                --input-bg: #1f2937;
+                --input-border: #4b5563;
+                --btn-bg: #374151;
+                --btn-hover: #4b5563;
+            }
+            #stocksell-emergency-scanner-wrapper[data-theme="light"] {
+                --bg-panel: #ffffff;
+                --text-main: #111827;
+                --text-muted: #6b7280;
+                --text-sub: #4b5563;
+                --border-color: #e5e7eb;
+                --input-bg: #f9fafb;
+                --input-border: #d1d5db;
+                --btn-bg: #f3f4f6;
+                --btn-hover: #e5e7eb;
+            }
+            .stocksell-btn {
+                background: var(--btn-bg);
+                color: var(--text-main);
+                border: 1px solid var(--border-color);
+                padding: 6px 14px;
+                border-radius: 6px;
+                font-size: 13px;
+                cursor: pointer;
+                font-weight: 600;
+                transition: all 0.2s;
+            }
+            .stocksell-btn:hover {
+                background: var(--btn-hover);
+            }
+            .stocksell-input {
+                width: 100%;
+                padding: 15px;
+                box-sizing: border-box;
+                border: 2px solid var(--input-border);
+                border-radius: 8px;
+                font-size: 18px;
+                outline: none;
+                transition: border-color 0.2s;
+                color: var(--text-main);
+                background: var(--input-bg);
+            }
+            .stocksell-input:focus {
+                border-color: #10b981;
+            }
+        `;
+        document.head.appendChild(style);
+    }
 
     //////////////////////////////////////////////////////
     // WYSZUKIWANIE STANOWISKA (RÓWNIEŻ W RAMKACH)
@@ -130,7 +195,7 @@
         historyContainer.innerHTML = ""; // Czyszczenie
 
         if (recentScans.length === 0) {
-            historyContainer.innerHTML = `<div style="color: #9ca3af; text-align: center; padding: 20px 0; font-size: 13px;">Brak historii skanów</div>`;
+            historyContainer.innerHTML = `<div style="color: var(--text-muted); text-align: center; padding: 20px 0; font-size: 13px;">Brak historii skanów</div>`;
             return;
         }
 
@@ -139,17 +204,17 @@
             const item = document.createElement("div");
             item.style.cssText = `
                 padding: 8px 0;
-                border-bottom: 1px solid #374151;
+                border-bottom: 1px solid var(--border-color);
                 display: flex;
                 flex-direction: column;
                 gap: 4px;
             `;
             item.innerHTML = `
                 <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-weight: bold; color: ${color}; font-size: 13px;">${scan.sku}</span>
-                    <span style="font-weight: bold; color: #d1d5db; font-family: monospace; font-size: 13px;">${scan.code}</span>
+                    <span style="font-weight: bold; color: ${color}; font-family: monospace; font-size: 14px;">${scan.code}</span>
+                    <span style="font-weight: bold; color: var(--text-sub); font-size: 13px;">${scan.sku}</span>
                 </div>
-                <div style="color: #9ca3af; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${scan.title}">${scan.title}</div>
+                <div style="color: var(--text-main); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${scan.title}">${scan.title}</div>
             `;
             historyContainer.appendChild(item);
         });
@@ -187,10 +252,7 @@
                     productCache.set(String(product.sku).toLowerCase(), product);
                 });
                 updateStatus(`✅ Baza gotowa (${productCache.size} prod.)`);
-                if (refreshBtn) {
-                    refreshBtn.disabled = false;
-                    refreshBtn.style.opacity = "1";
-                }
+                if (refreshBtn) refreshBtn.disabled = false;
                 return;
             } catch (e) {
                 console.error("Błąd odczytu cache", e);
@@ -198,10 +260,7 @@
         }
 
         updateStatus("⏳ Pobieranie bazy...");
-        if (refreshBtn) {
-            refreshBtn.disabled = true;
-            refreshBtn.style.opacity = "0.5";
-        }
+        if (refreshBtn) refreshBtn.disabled = true;
 
         GM_xmlhttpRequest({
             method: "GET",
@@ -222,18 +281,12 @@
                     updateStatus("❌ Błąd pobierania bazy");
                     console.error(e);
                 } finally {
-                    if (refreshBtn) {
-                        refreshBtn.disabled = false;
-                        refreshBtn.style.opacity = "1";
-                    }
+                    if (refreshBtn) refreshBtn.disabled = false;
                 }
             },
             onerror: function(err) {
                 updateStatus("❌ Błąd sieci (baza)");
-                if (refreshBtn) {
-                    refreshBtn.disabled = false;
-                    refreshBtn.style.opacity = "1";
-                }
+                if (refreshBtn) refreshBtn.disabled = false;
             }
         });
     }
@@ -344,8 +397,11 @@
             return;
         }
 
+        injectStyles();
+
         const wrapper = document.createElement("div");
         wrapper.id = "stocksell-emergency-scanner-wrapper";
+        wrapper.setAttribute("data-theme", currentTheme); // Inicjowanie motywu
         wrapper.style.cssText = `
             position: fixed;
             bottom: 40px;
@@ -379,18 +435,18 @@
         const panel = document.createElement("div");
         panel.style.cssText = `
             display: none;
-            width: 1050px; /* Szerszy panel dla pomieszczenia historii */
+            width: 1050px;
             max-width: 95vw;
-            background: #2b3035; /* Ciemnoszare, matowe tło */
-            color: #e5e7eb; /* Jasny tekst na ciemnym tle */
+            background: var(--bg-panel);
+            color: var(--text-main);
             border: 2px solid #10b981;
             border-radius: 12px;
             padding: 25px;
             box-shadow: 0 15px 35px rgba(0,0,0,0.5);
             margin-bottom: 20px;
+            transition: background 0.2s, color 0.2s;
         `;
 
-        // KONTENER NA 2 KOLUMNY
         const contentRow = document.createElement("div");
         contentRow.style.cssText = `
             display: flex;
@@ -398,65 +454,46 @@
             align-items: flex-start;
         `;
 
-        // LEWA KOLUMNA (Tytuł + Skaner - "Czerwony kwadrat")
+        // LEWA KOLUMNA
         const leftCol = document.createElement("div");
         leftCol.style.cssText = `
-            flex: 0 0 38%; /* Proporcja szerokości lewej kolumny */
+            flex: 0 0 38%;
             display: flex;
             flex-direction: column;
         `;
 
         const title = document.createElement("div");
         title.innerHTML = "<strong>⚡ Skaner niezależny (Zebra)</strong>";
-        title.style.fontSize = "22px"; // Powiększona czcionka tytułu
-        title.style.color = "#f9fafb";
+        title.style.fontSize = "18px";
+        title.style.color = "var(--text-main)";
         title.style.marginBottom = "20px";
 
         statusEl = document.createElement("div");
         statusEl.innerText = "⏳ Inicjalizacja bazy...";
         statusEl.style.fontSize = "13px";
-        statusEl.style.color = "#9ca3af";
+        statusEl.style.color = "var(--text-muted)";
         statusEl.style.marginBottom = "8px";
 
         printerStatusEl = document.createElement("div");
         printerStatusEl.innerText = "⏳ Szukanie Zebry...";
         printerStatusEl.style.fontSize = "13px";
-        printerStatusEl.style.color = "#9ca3af";
+        printerStatusEl.style.color = "var(--text-muted)";
         printerStatusEl.style.marginBottom = "15px";
 
         scanCounterEl = document.createElement("div");
         scanCounterEl.style.cssText = `
             font-size: 13px;
-            color: #d1d5db;
+            color: var(--text-sub);
             margin-bottom: 20px;
             padding-bottom: 15px;
-            border-bottom: 1px dashed #4b5563;
+            border-bottom: 1px dashed var(--border-color);
         `;
         updateScanCounterUI();
 
         const input = document.createElement("input");
         input.type = "text";
         input.placeholder = "Zeskanuj SKU...";
-        input.style.cssText = `
-            width: 100%;
-            padding: 15px;
-            box-sizing: border-box;
-            border: 2px solid #4b5563;
-            border-radius: 8px;
-            font-size: 18px;
-            outline: none;
-            transition: all 0.2s;
-            color: #f9fafb;
-            background: #1f2937; /* Ciemne tło pola */
-        `;
-        input.addEventListener("focus", () => {
-            input.style.borderColor = "#10b981";
-            input.style.background = "#374151";
-        });
-        input.addEventListener("blur", () => {
-            input.style.borderColor = "#4b5563";
-            input.style.background = "#1f2937";
-        });
+        input.className = "stocksell-input";
 
         const resultEl = document.createElement("div");
         resultEl.style.cssText = `
@@ -475,17 +512,16 @@
         leftCol.appendChild(input);
         leftCol.appendChild(resultEl);
 
-        // PRAWA KOLUMNA (Historia + Odśwież - "Żółty kwadrat")
+        // PRAWA KOLUMNA
         const rightCol = document.createElement("div");
         rightCol.style.cssText = `
             flex: 1;
-            border-left: 1px solid #4b5563;
+            border-left: 1px solid var(--border-color);
             padding-left: 30px;
             display: flex;
             flex-direction: column;
         `;
 
-        // Nagłówek prawej kolumny (Przycisk + Tekst)
         const rightHeader = document.createElement("div");
         rightHeader.style.cssText = `
             display: flex;
@@ -493,34 +529,41 @@
             align-items: center;
             margin-bottom: 15px;
             padding-bottom: 15px;
-            border-bottom: 1px solid #374151;
+            border-bottom: 1px solid var(--border-color);
         `;
 
         const historyTitle = document.createElement("div");
         historyTitle.innerHTML = "<strong>Ostatnie 10 skanów:</strong>";
         historyTitle.style.fontSize = "15px";
-        historyTitle.style.color = "#d1d5db";
+        historyTitle.style.color = "var(--text-sub)";
+
+        // Przyciski w prawym nagłówku
+        const buttonsContainer = document.createElement("div");
+        buttonsContainer.style.display = "flex";
+        buttonsContainer.style.gap = "10px";
+
+        const themeBtn = document.createElement("button");
+        themeBtn.innerHTML = currentTheme === "dark" ? "☀️ Jasny" : "🌙 Ciemny";
+        themeBtn.className = "stocksell-btn";
+        themeBtn.title = "Zmień motyw";
+        themeBtn.onclick = () => {
+            currentTheme = currentTheme === "dark" ? "light" : "dark";
+            wrapper.setAttribute("data-theme", currentTheme);
+            themeBtn.innerHTML = currentTheme === "dark" ? "☀️ Jasny" : "🌙 Ciemny";
+            GM_setValue("stocksell_theme", currentTheme);
+        };
 
         refreshBtn = document.createElement("button");
         refreshBtn.innerHTML = "🔄 Odśwież Bazę";
         refreshBtn.title = "Wymuś pobranie świeżej bazy";
-        refreshBtn.style.cssText = `
-            background: #374151; /* Ciemniejszy przycisk */
-            color: #e5e7eb;
-            border: 1px solid #4b5563;
-            padding: 6px 14px;
-            border-radius: 6px;
-            font-size: 13px;
-            cursor: pointer;
-            font-weight: 600;
-            transition: all 0.2s;
-        `;
-        refreshBtn.onmouseover = () => refreshBtn.style.background = "#4b5563";
-        refreshBtn.onmouseout = () => refreshBtn.style.background = "#374151";
+        refreshBtn.className = "stocksell-btn";
         refreshBtn.onclick = () => preloadProducts(true);
 
+        buttonsContainer.appendChild(themeBtn);
+        buttonsContainer.appendChild(refreshBtn);
+
         rightHeader.appendChild(historyTitle);
-        rightHeader.appendChild(refreshBtn);
+        rightHeader.appendChild(buttonsContainer);
 
         historyContainer = document.createElement("div");
         historyContainer.style.cssText = `
@@ -535,9 +578,7 @@
         // ZŁOŻENIE ELEMENTÓW
         contentRow.appendChild(leftCol);
         contentRow.appendChild(rightCol);
-
         panel.appendChild(contentRow);
-
         wrapper.appendChild(panel);
         wrapper.appendChild(toggleBtn);
 
