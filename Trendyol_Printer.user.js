@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Emergency Scanner (Zebra)
 // @namespace    stocksell-emergency
-// @version      2.8
+// @version      3.0
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -75,9 +75,9 @@
                 background: var(--btn-bg);
                 color: var(--text-main);
                 border: 1px solid var(--border-color);
-                padding: 6px 14px;
+                padding: 4px 10px;
                 border-radius: 6px;
-                font-size: 13px;
+                font-size: 12px;
                 cursor: pointer;
                 font-weight: 600;
                 transition: all 0.2s;
@@ -87,11 +87,11 @@
             }
             .stocksell-input {
                 width: 100%;
-                padding: 15px;
+                padding: 12px;
                 box-sizing: border-box;
                 border: 2px solid var(--input-border);
                 border-radius: 8px;
-                font-size: 18px;
+                font-size: 16px;
                 outline: none;
                 transition: border-color 0.2s;
                 color: var(--text-main);
@@ -195,7 +195,7 @@
         historyContainer.innerHTML = ""; // Czyszczenie
 
         if (recentScans.length === 0) {
-            historyContainer.innerHTML = `<div style="color: var(--text-muted); text-align: center; padding: 20px 0; font-size: 13px;">Brak historii skanów</div>`;
+            historyContainer.innerHTML = `<div style="color: var(--text-muted); text-align: center; padding: 10px 0; font-size: 13px;">Brak historii skanów</div>`;
             return;
         }
 
@@ -203,18 +203,18 @@
             const color = scan.status === 'success' ? '#10b981' : '#ef4444';
             const item = document.createElement("div");
             item.style.cssText = `
-                padding: 8px 0;
+                padding: 6px 0;
                 border-bottom: 1px solid var(--border-color);
                 display: flex;
                 flex-direction: column;
-                gap: 4px;
+                gap: 2px;
             `;
             item.innerHTML = `
                 <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-weight: bold; color: ${color}; font-family: monospace; font-size: 14px;">${scan.code}</span>
-                    <span style="font-weight: bold; color: var(--text-sub); font-size: 13px;">${scan.sku}</span>
+                    <span style="font-weight: bold; color: ${color}; font-family: monospace; font-size: 13px;">${scan.code}</span>
+                    <span style="font-weight: bold; color: var(--text-sub); font-size: 12px;">${scan.sku}</span>
                 </div>
-                <div style="color: var(--text-main); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${scan.title}">${scan.title}</div>
+                <div style="color: var(--text-main); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${scan.title}">${scan.title}</div>
             `;
             historyContainer.appendChild(item);
         });
@@ -399,24 +399,19 @@
 
         injectStyles();
 
+        // PUSTY KONTENER LOGICZNY
         const wrapper = document.createElement("div");
         wrapper.id = "stocksell-emergency-scanner-wrapper";
-        wrapper.setAttribute("data-theme", currentTheme); // Inicjowanie motywu
-        wrapper.style.cssText = `
-            position: fixed;
-            bottom: 40px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 9999999;
-            font-family: 'Open Sans', Arial, sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        `;
+        wrapper.setAttribute("data-theme", currentTheme);
 
+        // PRZYCISK TOGGLE (PO PRAWEJ STRONIE, NIEZALEŻNY OD PANELU)
         const toggleBtn = document.createElement("button");
         toggleBtn.innerHTML = "🖨️ Awaryjny Skaner";
         toggleBtn.style.cssText = `
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 9999999;
             background: #10b981;
             color: white;
             border: none;
@@ -432,18 +427,25 @@
         toggleBtn.onmouseover = () => toggleBtn.style.background = "#059669";
         toggleBtn.onmouseout = () => toggleBtn.style.background = "#10b981";
 
+        // GŁÓWNY PANEL
         const panel = document.createElement("div");
         panel.style.cssText = `
             display: none;
+            position: fixed;
+            bottom: 25px; /* Uniesiono lekko do góry */
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 9999998;
             width: 1050px;
             max-width: 95vw;
+            max-height: calc(100vh - 50px); /* Zabezpieczenie przed ucięciem na małych ekranach */
+            overflow-y: auto;
             background: var(--bg-panel);
             color: var(--text-main);
             border: 2px solid #10b981;
-            border-radius: 12px;
-            padding: 25px;
-            box-shadow: 0 15px 35px rgba(0,0,0,0.5);
-            margin-bottom: 20px;
+            border-radius: 12px; /* Przywrócono pełne zaokrąglenie */
+            padding: 20px 25px;
+            box-shadow: 0 5px 35px rgba(0,0,0,0.5);
             transition: background 0.2s, color 0.2s;
         `;
 
@@ -464,28 +466,28 @@
 
         const title = document.createElement("div");
         title.innerHTML = "<strong>⚡ Skaner niezależny (Zebra)</strong>";
-        title.style.fontSize = "18px";
+        title.style.fontSize = "16px";
         title.style.color = "var(--text-main)";
-        title.style.marginBottom = "20px";
+        title.style.marginBottom = "15px";
 
         statusEl = document.createElement("div");
         statusEl.innerText = "⏳ Inicjalizacja bazy...";
         statusEl.style.fontSize = "13px";
         statusEl.style.color = "var(--text-muted)";
-        statusEl.style.marginBottom = "8px";
+        statusEl.style.marginBottom = "6px";
 
         printerStatusEl = document.createElement("div");
         printerStatusEl.innerText = "⏳ Szukanie Zebry...";
         printerStatusEl.style.fontSize = "13px";
         printerStatusEl.style.color = "var(--text-muted)";
-        printerStatusEl.style.marginBottom = "15px";
+        printerStatusEl.style.marginBottom = "10px";
 
         scanCounterEl = document.createElement("div");
         scanCounterEl.style.cssText = `
             font-size: 13px;
             color: var(--text-sub);
-            margin-bottom: 20px;
-            padding-bottom: 15px;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
             border-bottom: 1px dashed var(--border-color);
         `;
         updateScanCounterUI();
@@ -497,7 +499,7 @@
 
         const resultEl = document.createElement("div");
         resultEl.style.cssText = `
-            margin-top: 20px;
+            margin-top: 15px;
             font-size: 16px;
             font-weight: bold;
             min-height: 25px;
@@ -527,20 +529,20 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 15px;
-            padding-bottom: 15px;
+            margin-bottom: 10px;
+            padding-bottom: 10px;
             border-bottom: 1px solid var(--border-color);
         `;
 
         const historyTitle = document.createElement("div");
         historyTitle.innerHTML = "<strong>Ostatnie 10 skanów:</strong>";
-        historyTitle.style.fontSize = "15px";
+        historyTitle.style.fontSize = "14px";
         historyTitle.style.color = "var(--text-sub)";
 
         // Przyciski w prawym nagłówku
         const buttonsContainer = document.createElement("div");
         buttonsContainer.style.display = "flex";
-        buttonsContainer.style.gap = "10px";
+        buttonsContainer.style.gap = "8px";
 
         const themeBtn = document.createElement("button");
         themeBtn.innerHTML = currentTheme === "dark" ? "☀️ Jasny" : "🌙 Ciemny";
@@ -579,6 +581,7 @@
         contentRow.appendChild(leftCol);
         contentRow.appendChild(rightCol);
         panel.appendChild(contentRow);
+
         wrapper.appendChild(panel);
         wrapper.appendChild(toggleBtn);
 
