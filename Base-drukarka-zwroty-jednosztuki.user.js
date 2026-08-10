@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      2.1
+// @version      2.2
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -147,7 +147,7 @@
         const today = new Date().toLocaleDateString('pl-PL');
         const cacheKey = `return_scan_count_${today}`;
         const currentCount = GM_getValue(cacheKey, 0);
-        scanCounterEl.innerHTML = `📊 Przetworzone zwroty dziś: <span style="font-size: 18px; font-weight: 800; color: #3b82f6;">${currentCount}</span>`;
+        //scanCounterEl.innerHTML = `📊 Przetworzone zwroty dziś: <span style="font-size: 18px; font-weight: 800; color: #3b82f6;">${currentCount}</span>`;
     }
 
     function incrementScanCounter() {
@@ -429,7 +429,7 @@
 
         leftCol.append(title, returnsStatusEl, productsStatusEl, printerStatusEl, scanCounterEl, input, reprintBtn, resultEl);
 
-        // PRAWA KOLUMNA
+        // PRAWA KOLUMNA (Rozciągnięta na wysokość)
         const rightCol = document.createElement("div");
         rightCol.style.cssText = `flex: 1; border-left: 1px solid var(--border-color); padding-left: 40px; display: flex; flex-direction: column; height: 100%;`;
 
@@ -477,6 +477,35 @@
         wrapper.append(panel, toggleBtn);
         document.body.appendChild(wrapper);
 
+        // DYNAMICZNE KOLORY BŁĘDÓW
+        let lastAlertType = null;
+        let lastAlertColor = null;
+
+        function getDynamicColor(type) {
+            if (type === "rejected") {
+                if (lastAlertType === "rejected") {
+                    lastAlertColor = (lastAlertColor === "#f59e0b") ? "#ef4444" : "#f59e0b";
+                } else {
+                    lastAlertColor = "#f59e0b"; // Żółty startowy dla odrzuconych
+                }
+                lastAlertType = "rejected";
+                return lastAlertColor;
+            } else if (type === "error") {
+                if (lastAlertType === "error") {
+                    lastAlertColor = (lastAlertColor === "#ef4444") ? "#f59e0b" : "#ef4444";
+                } else {
+                    lastAlertColor = "#ef4444"; // Czerwony startowy dla błędów
+                }
+                lastAlertType = "error";
+                return lastAlertColor;
+            }
+        }
+
+        function resetDynamicColor() {
+            lastAlertType = null;
+            lastAlertColor = null;
+        }
+
         // LOGIKA SKANOWANIA
         toggleBtn.onclick = () => {
             const isHidden = panel.style.display === "none";
@@ -491,10 +520,13 @@
             if (lastPrintedCode && lastPrintedTitle) {
                 if (!printerReady) {
                     playErrorSound();
+                    const color = getDynamicColor("error");
                     resultEl.style.color = "";
-                    resultEl.innerHTML = `<div style="color: #ef4444;">❌ Brak połączenia z drukarką!</div>`;
+                    resultEl.innerHTML = `<div style="color: ${color};">❌ Brak połączenia z drukarką!</div>`;
                     return;
                 }
+
+                resetDynamicColor();
                 printLabel(lastPrintedTitle, lastPrintedCode);
                 resultEl.style.color = "";
                 resultEl.innerHTML = `
@@ -503,8 +535,9 @@
                 `;
             } else {
                 playErrorSound();
+                const color = getDynamicColor("error");
                 resultEl.style.color = "";
-                resultEl.innerHTML = `<div style="color: #ef4444;">❌ Brak kodu do ponownego wydruku!</div>`;
+                resultEl.innerHTML = `<div style="color: ${color};">❌ Brak kodu do ponownego wydruku!</div>`;
             }
             setTimeout(() => input.focus(), 100);
         };
@@ -521,8 +554,9 @@
 
                 if (!retData) {
                     playErrorSound();
+                    const color = getDynamicColor("error");
                     resultEl.style.color = "";
-                    resultEl.innerHTML = `<div style="color: #ef4444;">❌ Nie znaleziono przesyłki w bazie.</div>`;
+                    resultEl.innerHTML = `<div style="color: ${color};">❌ Nie znaleziono przesyłki w bazie.</div>`;
                     addScanToHistory(trackingInput, "-", "Brak przesyłki w 'zgłoszone'", "error");
                     setTimeout(() => sendLogToSheet("-", trackingInput, "nie znaleziono"), 10);
                     return;
@@ -530,8 +564,9 @@
 
                 if (retData.accepted !== "tak") {
                     playErrorSound();
+                    const color = getDynamicColor("rejected");
                     resultEl.style.color = "";
-                    resultEl.innerHTML = `<div style="color: #f59e0b;">⚠️ Zwrot: ${retData.return_nr} | Odrzucono (nie do przyjęcia)</div>`;
+                    resultEl.innerHTML = `<div style="color: ${color};">⚠️ Zwrot: ${retData.return_nr} | Odrzucono (nie do przyjęcia)</div>`;
                     addScanToHistory(trackingInput, "-", `Odrzucono (Zwrot ${retData.return_nr})`, "error");
                     setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "nie"), 10);
                     return;
@@ -539,8 +574,9 @@
 
                 if (!retData.print_code) {
                     playErrorSound();
+                    const color = getDynamicColor("error");
                     resultEl.style.color = "";
-                    resultEl.innerHTML = `<div style="color: #ef4444;">❌ Zwrot: ${retData.return_nr} | Brak kodu w 'zgłoszone'</div>`;
+                    resultEl.innerHTML = `<div style="color: ${color};">❌ Zwrot: ${retData.return_nr} | Brak kodu w 'zgłoszone'</div>`;
                     addScanToHistory(trackingInput, "-", `Brak SKU w zgłoszone (${retData.return_nr})`, "error");
                     setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "tak"), 10);
                     return;
@@ -559,8 +595,9 @@
                         if (!retData.title && product.title) finalTitle = product.title;
                     } else {
                         playErrorSound();
+                        const color = getDynamicColor("error");
                         resultEl.style.color = "";
-                        resultEl.innerHTML = `<div style="color: #ef4444;">❌ Zwrot: ${retData.return_nr} | Brak SKU w bazie produktów: ${rawCode}</div>`;
+                        resultEl.innerHTML = `<div style="color: ${color};">❌ Zwrot: ${retData.return_nr} | Brak SKU w bazie produktów: ${rawCode}</div>`;
                         addScanToHistory(trackingInput, "-", `Brak w bazie prod: ${rawCode}`, "error");
                         setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "tak"), 10);
                         return;
@@ -569,13 +606,15 @@
 
                 if (!printerReady) {
                     playErrorSound();
+                    const color = getDynamicColor("error");
                     resultEl.style.color = "";
-                    resultEl.innerHTML = `<div style="color: #ef4444;">❌ Brak połączenia z drukarką!</div>`;
+                    resultEl.innerHTML = `<div style="color: ${color};">❌ Brak połączenia z drukarką!</div>`;
                     addScanToHistory(trackingInput, cleanCode, "Brak drukarki", "error");
                     setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "tak"), 10);
                     return;
                 }
 
+                resetDynamicColor();
                 resultEl.style.color = "";
                 resultEl.innerHTML = `
                     <div style="color: #10b981; font-size: 18px; margin-bottom: 12px;">✔️ Drukowanie: ${cleanCode}</div>
