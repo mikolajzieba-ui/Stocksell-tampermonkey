@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      1.7
+// @version      1.8
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -332,7 +332,7 @@
         const toggleBtn = document.createElement("button");
         toggleBtn.innerHTML = "📦 Skaner Zwrotów";
         toggleBtn.style.cssText = `
-            position: fixed; bottom: 30px; left: 30px; /* Zmieniono położenie na lewy dolny róg */
+            position: fixed; bottom: 30px; left: 30px;
             z-index: 9999999; background: #3b82f6; color: white; border: none;
             padding: 12px 24px; border-radius: 50px; font-size: 15px; font-weight: bold;
             cursor: pointer; box-shadow: 0 4px 15px rgba(0,0,0,0.4); outline: none;
@@ -448,7 +448,8 @@
                     resultEl.style.color = "#ef4444";
                     resultEl.innerText = `❌ Nie znaleziono przesyłki w bazie.`;
                     addScanToHistory(trackingInput, "-", "Brak przesyłki w 'zgłoszone'", "error");
-                    setTimeout(() => sendLogToSheet("-", trackingInput, "Brak w bazie"), 10);
+                    // Wysyłamy status "nie znaleziono"
+                    setTimeout(() => sendLogToSheet("-", trackingInput, "nie znaleziono"), 10);
                     return;
                 }
 
@@ -456,7 +457,8 @@
                     resultEl.style.color = "#f59e0b";
                     resultEl.innerText = `⚠️ Zwrot: ${retData.return_nr} | Odrzucono (nie do przyjęcia)`;
                     addScanToHistory(trackingInput, "-", `Odrzucono (Zwrot ${retData.return_nr})`, "error");
-                    setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "Odrzucono"), 10);
+                    // Wysyłamy status "nie"
+                    setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "nie"), 10);
                     return;
                 }
 
@@ -464,7 +466,8 @@
                     resultEl.style.color = "#ef4444";
                     resultEl.innerText = `❌ Zwrot: ${retData.return_nr} | Brak kodu w 'zgłoszone'`;
                     addScanToHistory(trackingInput, "-", `Brak SKU w zgłoszone (${retData.return_nr})`, "error");
-                    setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "Brak SKU w zgłoszone"), 10);
+                    // Wysyłamy status "tak" (bo zwrot jest do przyjęcia)
+                    setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "tak"), 10);
                     return;
                 }
 
@@ -478,13 +481,13 @@
                     const product = productCache.get(rawCode.toLowerCase());
                     if (product && product.code) {
                         cleanCode = product.code;
-                        // Jeśli z jakiegoś powodu w 'zgłoszone' nie ma tytułu, dobieramy go z bazy produktów
                         if (!retData.title && product.title) finalTitle = product.title;
                     } else {
                         resultEl.style.color = "#ef4444";
                         resultEl.innerText = `❌ Zwrot: ${retData.return_nr} | Brak SKU w bazie produktów: ${rawCode}`;
                         addScanToHistory(trackingInput, "-", `Brak w bazie prod: ${rawCode}`, "error");
-                        setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "Brak SKU"), 10);
+                        // Wysyłamy status "tak"
+                        setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "tak"), 10);
                         return;
                     }
                 }
@@ -493,7 +496,8 @@
                     resultEl.style.color = "#ef4444";
                     resultEl.innerText = "❌ Brak połączenia z drukarką!";
                     addScanToHistory(trackingInput, cleanCode, "Brak drukarki", "error");
-                    setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "Błąd drukarki"), 10);
+                    // Wysyłamy status "tak"
+                    setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "tak"), 10);
                     return;
                 }
 
@@ -502,7 +506,9 @@
 
                 printLabel(finalTitle, cleanCode);
                 addScanToHistory(trackingInput, cleanCode, finalTitle, "success");
-                setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "Wydrukowano"), 10);
+
+                // Pełen sukces -> status "tak"
+                setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "tak"), 10);
             }
         });
 
