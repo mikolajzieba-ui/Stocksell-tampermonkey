@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      1.9
+// @version      2.0
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -38,8 +38,40 @@
     let refreshBtn = null;
     let historyContainer = null;
 
+    // Zmienne do ponownego wydruku
+    let lastPrintedCode = null;
+    let lastPrintedTitle = null;
+
     let recentScans = JSON.parse(GM_getValue("returns_recent_scans_v1", "[]"));
     let currentTheme = GM_getValue("stocksell_theme", "dark");
+
+    //////////////////////////////////////////////////////
+    // DŹWIĘK BŁĘDU (Generowany z przeglądarki)
+    //////////////////////////////////////////////////////
+    function playErrorSound() {
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+
+            function playBeep(freq, startTime, duration) {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'square'; // Kwadratowa fala daje bardziej "ostrzegawczy" ton
+                osc.frequency.setValueAtTime(freq, startTime);
+                gain.gain.setValueAtTime(0.1, startTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(startTime);
+                osc.stop(startTime + duration);
+            }
+
+            const now = ctx.currentTime;
+            playBeep(300, now, 0.15);      // Pierwszy wyższy ton
+            playBeep(200, now + 0.15, 0.2); // Drugi niższy ton
+        } catch (e) {
+            console.error("Web Audio API nie jest wspierane", e);
+        }
+    }
 
     //////////////////////////////////////////////////////
     // STYLE CSS
@@ -54,26 +86,34 @@
                 --bg-panel: #2b3035; --text-main: #f9fafb; --text-muted: #9ca3af;
                 --text-sub: #d1d5db; --border-color: #374151; --input-bg: #1f2937;
                 --input-border: #4b5563; --btn-bg: #374151; --btn-hover: #4b5563;
+                --scroll-thumb: #4b5563; --scroll-thumb-hover: #6b7280;
             }
             #stocksell-returns-scanner-wrapper[data-theme="light"] {
                 --bg-panel: #ffffff; --text-main: #111827; --text-muted: #6b7280;
                 --text-sub: #4b5563; --border-color: #e5e7eb; --input-bg: #f9fafb;
                 --input-border: #d1d5db; --btn-bg: #f3f4f6; --btn-hover: #e5e7eb;
+                --scroll-thumb: #d1d5db; --scroll-thumb-hover: #9ca3af;
             }
             .stocksell-btn {
                 background: var(--btn-bg); color: var(--text-main);
-                border: 1px solid var(--border-color); padding: 4px 10px;
-                border-radius: 6px; font-size: 12px; cursor: pointer;
+                border: 1px solid var(--border-color); padding: 6px 14px;
+                border-radius: 6px; font-size: 14px; cursor: pointer;
                 font-weight: 600; transition: all 0.2s;
             }
             .stocksell-btn:hover { background: var(--btn-hover); }
             .stocksell-input {
-                width: 100%; padding: 12px; box-sizing: border-box;
+                width: 100%; padding: 16px; box-sizing: border-box;
                 border: 2px solid var(--input-border); border-radius: 8px;
-                font-size: 16px; outline: none; transition: border-color 0.2s;
+                font-size: 20px; outline: none; transition: border-color 0.2s;
                 color: var(--text-main); background: var(--input-bg);
             }
             .stocksell-input:focus { border-color: #3b82f6; }
+
+            /* Stylowanie paska przewijania dla historii */
+            .stocksell-scroll::-webkit-scrollbar { width: 8px; }
+            .stocksell-scroll::-webkit-scrollbar-track { background: transparent; }
+            .stocksell-scroll::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 4px; }
+            .stocksell-scroll::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); }
         `;
         document.head.appendChild(style);
     }
@@ -107,7 +147,7 @@
         const today = new Date().toLocaleDateString('pl-PL');
         const cacheKey = `return_scan_count_${today}`;
         const currentCount = GM_getValue(cacheKey, 0);
-        //scanCounterEl.innerHTML = `📊 Przetworzone zwroty dziś: <span style="font-size: 15px; font-weight: 800; color: #3b82f6;">${currentCount}</span>`;
+        scanCounterEl.innerHTML = `📊 Przetworzone zwroty dziś: <span style="font-size: 18px; font-weight: 800; color: #3b82f6;">${currentCount}</span>`;
     }
 
     function incrementScanCounter() {
@@ -125,7 +165,7 @@
         if (!historyContainer) return;
         historyContainer.innerHTML = "";
         if (recentScans.length === 0) {
-            historyContainer.innerHTML = `<div style="color: var(--text-muted); text-align: center; padding: 10px 0; font-size: 13px;">Brak historii skanów</div>`;
+            historyContainer.innerHTML = `<div style="color: var(--text-muted); text-align: center; padding: 20px 0; font-size: 15px;">Brak historii skanów</div>`;
             return;
         }
 
@@ -133,15 +173,15 @@
             const color = scan.status === 'success' ? '#10b981' : '#ef4444';
             const item = document.createElement("div");
             item.style.cssText = `
-                padding: 5px 0; border-bottom: 1px solid var(--border-color);
-                display: flex; flex-direction: column; gap: 2px;
+                padding: 10px 0; border-bottom: 1px solid var(--border-color);
+                display: flex; flex-direction: column; gap: 4px;
             `;
             item.innerHTML = `
                 <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-weight: bold; color: ${color}; font-family: monospace; font-size: 13px;">${scan.printCode}</span>
-                    <span style="font-weight: bold; color: var(--text-sub); font-size: 12px;">${scan.tracking}</span>
+                    <span style="font-weight: bold; color: ${color}; font-family: monospace; font-size: 16px;">${scan.printCode}</span>
+                    <span style="font-weight: bold; color: var(--text-sub); font-size: 14px;">${scan.tracking}</span>
                 </div>
-                <div style="color: var(--text-main); font-size: 13px;">${scan.title}</div>
+                <div style="color: var(--text-main); font-size: 15px;">${scan.title}</div>
             `;
             historyContainer.appendChild(item);
         });
@@ -149,7 +189,7 @@
 
     function addScanToHistory(tracking, printCode, title, status) {
         recentScans.unshift({ tracking, printCode, title, status });
-        if (recentScans.length > 10) recentScans.pop();
+        if (recentScans.length > 50) recentScans.pop();
         GM_setValue("returns_recent_scans_v1", JSON.stringify(recentScans));
         updateRecentScansUI();
     }
@@ -324,7 +364,6 @@
         wrapper.id = "stocksell-returns-scanner-wrapper";
         wrapper.setAttribute("data-theme", currentTheme);
 
-        // Ukrywamy panel na start, jeśli to nie są zwroty
         if (!window.location.href.includes("orders_returns")) {
             wrapper.style.display = "none";
         }
@@ -340,58 +379,70 @@
 
         const panel = document.createElement("div");
         panel.style.cssText = `
-            display: none; position: fixed; bottom: 45px; left: 50%; transform: translateX(-50%);
-            z-index: 9999998; width: 1050px; max-width: 95vw; max-height: 92vh; overflow-y: auto;
+            display: none; position: fixed; top: 3vh; left: 2vw;
+            z-index: 9999998; width: 96vw; height: 94vh; box-sizing: border-box;
             background: var(--bg-panel); color: var(--text-main);
             border: 2px solid #3b82f6; border-radius: 12px;
-            padding: 18px 25px; box-shadow: 0 5px 35px rgba(0,0,0,0.5);
+            padding: 30px 40px; box-shadow: 0 10px 45px rgba(0,0,0,0.6);
         `;
 
         const contentRow = document.createElement("div");
-        contentRow.style.cssText = `display: flex; gap: 30px; align-items: flex-start;`;
+        contentRow.style.cssText = `display: flex; gap: 50px; align-items: stretch; height: 100%; box-sizing: border-box;`;
 
         // LEWA KOLUMNA
         const leftCol = document.createElement("div");
-        leftCol.style.cssText = `flex: 0 0 38%; display: flex; flex-direction: column;`;
+        leftCol.style.cssText = `flex: 0 0 40%; display: flex; flex-direction: column;`;
 
         const title = document.createElement("div");
         title.innerHTML = "<strong>📦 Skaner Zwrotów (Zebra)</strong>";
-        title.style.fontSize = "16px"; title.style.color = "var(--text-main)"; title.style.marginBottom = "12px";
+        title.style.fontSize = "22px"; title.style.color = "var(--text-main)"; title.style.marginBottom = "20px";
 
         returnsStatusEl = document.createElement("div");
-        returnsStatusEl.style.cssText = `font-size: 13px; color: var(--text-muted); margin-bottom: 2px;`;
+        returnsStatusEl.style.cssText = `font-size: 15px; color: var(--text-muted); margin-bottom: 4px;`;
 
         productsStatusEl = document.createElement("div");
-        productsStatusEl.style.cssText = `font-size: 13px; color: var(--text-muted); margin-bottom: 6px;`;
+        productsStatusEl.style.cssText = `font-size: 15px; color: var(--text-muted); margin-bottom: 8px;`;
 
         printerStatusEl = document.createElement("div");
-        printerStatusEl.style.cssText = `font-size: 13px; color: var(--text-muted); margin-bottom: 8px;`;
+        printerStatusEl.style.cssText = `font-size: 15px; color: var(--text-muted); margin-bottom: 12px;`;
 
         scanCounterEl = document.createElement("div");
-        scanCounterEl.style.cssText = `font-size: 13px; color: var(--text-sub); margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px dashed var(--border-color);`;
+        scanCounterEl.style.cssText = `font-size: 15px; color: var(--text-sub); margin-bottom: 25px; padding-bottom: 15px; border-bottom: 1px dashed var(--border-color);`;
         updateScanCounterUI();
 
         const input = document.createElement("input");
         input.type = "text"; input.placeholder = "Zeskanuj numer przesyłki..."; input.className = "stocksell-input";
 
+        const reprintBtn = document.createElement("button");
+        reprintBtn.innerHTML = "🖨️ Wydrukuj ostatni kod";
+        // Zastosowano jaskrawe, niebieskie kolory dla przycisku, wyróżniające się w obu motywach
+        reprintBtn.style.cssText = `
+            margin-top: 15px; width: 100%; padding: 14px; font-size: 16px;
+            background-color: #3b82f6; color: #ffffff; border: none;
+            border-radius: 8px; cursor: pointer; font-weight: bold;
+            transition: all 0.2s; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        `;
+        reprintBtn.onmouseover = () => reprintBtn.style.backgroundColor = "#2563eb";
+        reprintBtn.onmouseout = () => reprintBtn.style.backgroundColor = "#3b82f6";
+
         const resultEl = document.createElement("div");
-        resultEl.style.cssText = `margin-top: 12px; font-size: 16px; font-weight: bold; min-height: 25px; text-align: center;`;
+        resultEl.style.cssText = `margin-top: 25px; font-size: 18px; font-weight: bold; min-height: 30px; text-align: center;`;
 
-        leftCol.append(title, returnsStatusEl, productsStatusEl, printerStatusEl, scanCounterEl, input, resultEl);
+        leftCol.append(title, returnsStatusEl, productsStatusEl, printerStatusEl, scanCounterEl, input, reprintBtn, resultEl);
 
-        // PRAWA KOLUMNA
+        // PRAWA KOLUMNA (Rozciągnięta na wysokość)
         const rightCol = document.createElement("div");
-        rightCol.style.cssText = `flex: 1; border-left: 1px solid var(--border-color); padding-left: 30px; display: flex; flex-direction: column;`;
+        rightCol.style.cssText = `flex: 1; border-left: 1px solid var(--border-color); padding-left: 40px; display: flex; flex-direction: column; height: 100%;`;
 
         const rightHeader = document.createElement("div");
-        rightHeader.style.cssText = `display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-color);`;
+        rightHeader.style.cssText = `display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid var(--border-color); flex-shrink: 0;`;
 
         const historyTitle = document.createElement("div");
-        historyTitle.innerHTML = "<strong>Ostatnie 10 zwrotów:</strong>";
-        historyTitle.style.cssText = `font-size: 14px; color: var(--text-sub);`;
+        historyTitle.innerHTML = "<strong>Historia skanów:</strong>";
+        historyTitle.style.cssText = `font-size: 18px; color: var(--text-sub);`;
 
         const buttonsContainer = document.createElement("div");
-        buttonsContainer.style.cssText = `display: flex; gap: 8px;`;
+        buttonsContainer.style.cssText = `display: flex; gap: 12px;`;
 
         const themeBtn = document.createElement("button");
         themeBtn.innerHTML = currentTheme === "dark" ? "☀️ Jasny" : "🌙 Ciemny";
@@ -414,8 +465,10 @@
         buttonsContainer.append(themeBtn, refreshBtn);
         rightHeader.append(historyTitle, buttonsContainer);
 
+        // Historia przewijana
         historyContainer = document.createElement("div");
-        historyContainer.style.display = "flex"; historyContainer.style.flexDirection = "column";
+        historyContainer.className = "stocksell-scroll";
+        historyContainer.style.cssText = `display: flex; flex-direction: column; flex: 1; overflow-y: auto; padding-right: 15px;`;
 
         updateRecentScansUI();
         rightCol.append(rightHeader, historyContainer);
@@ -434,6 +487,26 @@
             if (isHidden) { setTimeout(() => input.focus(), 100); updateScanCounterUI(); }
         };
 
+        // Ponowny wydruk
+        reprintBtn.onclick = () => {
+            if (lastPrintedCode && lastPrintedTitle) {
+                if (!printerReady) {
+                    playErrorSound();
+                    resultEl.style.color = "#ef4444";
+                    resultEl.innerText = "❌ Brak połączenia z drukarką!";
+                    return;
+                }
+                printLabel(lastPrintedTitle, lastPrintedCode);
+                resultEl.style.color = "#10b981";
+                resultEl.innerText = `✔️ Wydrukowano ponownie: ${lastPrintedCode}`;
+            } else {
+                playErrorSound();
+                resultEl.style.color = "#ef4444";
+                resultEl.innerText = "❌ Brak kodu do ponownego wydruku!";
+            }
+            setTimeout(() => input.focus(), 100);
+        };
+
         input.addEventListener("keydown", function(e) {
             if (e.key === "Enter") {
                 const trackingInput = input.value.trim().toLowerCase();
@@ -445,28 +518,28 @@
                 const retData = returnsCache.get(trackingInput);
 
                 if (!retData) {
+                    playErrorSound();
                     resultEl.style.color = "#ef4444";
                     resultEl.innerText = `❌ Nie znaleziono przesyłki w bazie.`;
                     addScanToHistory(trackingInput, "-", "Brak przesyłki w 'zgłoszone'", "error");
-                    // Wysyłamy status "nie znaleziono"
                     setTimeout(() => sendLogToSheet("-", trackingInput, "nie znaleziono"), 10);
                     return;
                 }
 
                 if (retData.accepted !== "tak") {
+                    playErrorSound();
                     resultEl.style.color = "#f59e0b";
                     resultEl.innerText = `⚠️ Zwrot: ${retData.return_nr} | Odrzucono (nie do przyjęcia)`;
                     addScanToHistory(trackingInput, "-", `Odrzucono (Zwrot ${retData.return_nr})`, "error");
-                    // Wysyłamy status "nie"
                     setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "nie"), 10);
                     return;
                 }
 
                 if (!retData.print_code) {
+                    playErrorSound();
                     resultEl.style.color = "#ef4444";
                     resultEl.innerText = `❌ Zwrot: ${retData.return_nr} | Brak kodu w 'zgłoszone'`;
                     addScanToHistory(trackingInput, "-", `Brak SKU w zgłoszone (${retData.return_nr})`, "error");
-                    // Wysyłamy status "tak" (bo zwrot jest do przyjęcia)
                     setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "tak"), 10);
                     return;
                 }
@@ -483,20 +556,20 @@
                         cleanCode = product.code;
                         if (!retData.title && product.title) finalTitle = product.title;
                     } else {
+                        playErrorSound();
                         resultEl.style.color = "#ef4444";
                         resultEl.innerText = `❌ Zwrot: ${retData.return_nr} | Brak SKU w bazie produktów: ${rawCode}`;
                         addScanToHistory(trackingInput, "-", `Brak w bazie prod: ${rawCode}`, "error");
-                        // Wysyłamy status "tak"
                         setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "tak"), 10);
                         return;
                     }
                 }
 
                 if (!printerReady) {
+                    playErrorSound();
                     resultEl.style.color = "#ef4444";
                     resultEl.innerText = "❌ Brak połączenia z drukarką!";
                     addScanToHistory(trackingInput, cleanCode, "Brak drukarki", "error");
-                    // Wysyłamy status "tak"
                     setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "tak"), 10);
                     return;
                 }
@@ -504,10 +577,13 @@
                 resultEl.style.color = "#10b981";
                 resultEl.innerText = `✔️ Drukowanie: ${cleanCode}`;
 
+                // Zapamiętanie ostatniego kodu do ponownego wydruku
+                lastPrintedCode = cleanCode;
+                lastPrintedTitle = finalTitle;
+
                 printLabel(finalTitle, cleanCode);
                 addScanToHistory(trackingInput, cleanCode, finalTitle, "success");
 
-                // Pełen sukces -> status "tak"
                 setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "tak"), 10);
             }
         });
