@@ -6,6 +6,8 @@
 // @match        https://*.stocksell.io/*
 // @require      https://unpkg.com/tesseract.js@4.0.1/dist/tesseract.min.js
 // @grant        none
+// @downloadURL  https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Stocksell-skaner-z-kamery.user.js
+// @updateURL    https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Stocksell-skaner-z-kamery.user.js
 // ==/UserScript==
 
 (function() {
