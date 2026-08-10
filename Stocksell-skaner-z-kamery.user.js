@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         StockSell - Skaner OCR (Wersja 6.0 - Burst Mode)
+// @name         StockSell - Skaner OCR (Wersja 7.0 - Diagnostyka)
 // @namespace    http://tampermonkey.net/
-// @version      6.0
-// @description  Tryb seryjny (3 klatki w 0.5s), powiększone okno, auto-kontrast
+// @version      7.0
+// @description  Tryb diagnostyczny (pokazuje wycięte zdjęcie), brak agresywnego filtru
 // @match        https://*.stocksell.io/*
 // @require      https://unpkg.com/tesseract.js@4.0.1/dist/tesseract.min.js
 // @grant        none
@@ -20,7 +20,7 @@
 
         const camBtn = document.createElement('button');
         camBtn.id = 'btn-camera-ocr';
-        camBtn.innerText = '📷 Skanuj tekst (OCR)';
+        camBtn.innerText = '📷 Skanuj tekst (Tryb Diagnostyczny)';
         camBtn.style.cssText = 'margin-top: 15px; width: 100%; padding: 10px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;';
         
         const uiContainer = document.createElement('div');
@@ -47,7 +47,7 @@
         video.setAttribute('autoplay', '');
         video.setAttribute('playsinline', ''); 
         
-        // POWIĘKSZONE OKIENKO (Wysokość 30%, szerokość 90%)
+        // Ramka celownika
         const overlay = document.createElement('div');
         overlay.style.cssText = 'position: absolute; top: 35%; left: 5%; width: 90%; height: 30%; border: 2px solid #FFEB3B; box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.7); box-sizing: border-box; z-index: 10; pointer-events: none;';
 
@@ -55,7 +55,7 @@
         videoWrapper.appendChild(overlay);
         
         const captureBtn = document.createElement('button');
-        captureBtn.innerText = '📸 Skanuj (0.5 sekundy)';
+        captureBtn.innerText = '📸 Zrób zdjęcie';
         captureBtn.style.cssText = 'margin-top: 10px; width: 100%; max-width: 320px; padding: 10px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 16px;';
         captureBtn.style.display = 'none'; 
 
@@ -85,94 +85,77 @@
         captureBtn.addEventListener('click', async (e) => {
             e.preventDefault();
             captureBtn.disabled = true;
-            statusText.innerText = 'Przechwytywanie klatek...';
+            statusText.innerText = 'Przetwarzanie...';
             
             const cropX = video.videoWidth * 0.05;
             const cropY = video.videoHeight * 0.35;
             const cropW = video.videoWidth * 0.90;
             const cropH = video.videoHeight * 0.30;
-            const scale = 2; 
+            const scale = 2; // Powiększenie obrazu x2
 
-            const canvases = [];
-
-            // Funkcja do zrobienia pojedynczej klatki
-            const grabFrame = () => {
-                const canvas = document.createElement('canvas');
-                canvas.width = cropW * scale;
-                canvas.height = cropH * scale;
-                const ctx = canvas.getContext('2d');
-                ctx.imageSmoothingEnabled = true;
-                ctx.imageSmoothingQuality = 'high';
-                ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height);
-                
-                // Zwiększenie kontrastu
-                const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                for (let i = 0; i < imgData.data.length; i += 4) {
-                    let brightness = (imgData.data[i] + imgData.data[i+1] + imgData.data[i+2]) / 3;
-                    let color = brightness > 110 ? 255 : 0;
-                    imgData.data[i] = imgData.data[i+1] = imgData.data[i+2] = color;
-                }
-                ctx.putImageData(imgData, 0, 0);
-                canvases.push(canvas);
-            };
-
-            // Strzelamy 3 klatki w ciągu 0.5 sekundy
-            grabFrame(); // 0ms
+            const canvas = document.createElement('canvas');
+            canvas.width = cropW * scale;
+            canvas.height = cropH * scale;
+            const ctx = canvas.getContext('2d');
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
             
-            setTimeout(grabFrame, 250); // 250ms
+            // Rysujemy czysty obraz, bez zmiany kolorów
+            ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height);
             
-            setTimeout(async () => {
-                grabFrame(); // 500ms
+            // Konwersja na prostą skalę szarości (mniej destrukcyjna niż czarno-biały kontrast)
+            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            for (let i = 0; i < imgData.data.length; i += 4) {
+                let avg = (imgData.data[i] + imgData.data[i+1] + imgData.data[i+2]) / 3;
+                imgData.data[i] = imgData.data[i+1] = imgData.data[i+2] = avg; // Szarość
+            }
+            ctx.putImageData(imgData, 0, 0);
+
+            stream.getTracks().forEach(track => track.stop());
+            videoWrapper.remove(); 
+            captureBtn.remove();
+
+            // POKAZANIE ZDJĘCIA DLA UŻYTKOWNIKA
+            const debugText = document.createElement('p');
+            debugText.innerText = 'To widzi algorytm (sprawdź czy jest ostre i bez kresek):';
+            debugText.style.cssText = 'font-size: 12px; color: #666; margin-bottom: 5px;';
+            container.appendChild(debugText);
+            
+            canvas.style.cssText = 'border: 2px solid red; max-width: 100%; margin-bottom: 15px; border-radius: 4px;';
+            container.appendChild(canvas);
+
+            statusText.innerText = 'Czytam tekst (OCR)...';
+
+            try {
+                const result = await Tesseract.recognize(canvas, 'eng', {
+                    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-'
+                });
                 
-                // Zatrzymujemy wideo po 0.5s
-                stream.getTracks().forEach(track => track.stop());
-                videoWrapper.remove(); 
-                captureBtn.remove();
-                
-                statusText.innerText = 'Analiza z 3 zdjęć (to zajmie kilka sekund)...';
-
-                try {
-                    let allFoundWords = new Set(); // Set zapobiega duplikatom
-
-                    // Analizujemy każdą z 3 klatek
-                    for (let i = 0; i < canvases.length; i++) {
-                        const result = await Tesseract.recognize(canvases[i], 'eng', {
-                            tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-'
-                            // Usunięto pageseg_mode: '7', bo powiększyliśmy okno i może być w nim kilka linijek
-                        });
-                        
-                        result.data.words.forEach(w => {
-                            if (w.text.trim().length > 4) {
-                                allFoundWords.add(w.text.trim());
-                            }
-                        });
-                    }
-                    
-                    displayResults(Array.from(allFoundWords), container, inputElement);
-                    statusText.innerText = 'Wybierz pozycję poniżej:';
-                } catch (err) {
-                    statusText.innerText = 'Błąd przetwarzania obrazu.';
-                }
-                btnElement.disabled = false;
-
-            }, 500); 
+                const words = result.data.words.filter(w => w.text.trim().length > 4);
+                displayResults(words, container, inputElement);
+                statusText.innerText = 'Wyniki:';
+            } catch (err) {
+                statusText.innerText = 'Błąd przetwarzania obrazu.';
+            }
+            btnElement.disabled = false;
         });
     }
 
-    function displayResults(wordsArray, container, inputElement) {
+    function displayResults(words, container, inputElement) {
         const resultsDiv = document.createElement('div');
         resultsDiv.style.cssText = 'display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 10px;';
 
-        if (wordsArray.length === 0) {
+        if (words.length === 0) {
             const noRes = document.createElement('span');
-            noRes.innerText = 'Nic nie znaleziono w żadnej z klatek.';
+            noRes.innerText = 'Nic nie znaleziono.';
             resultsDiv.appendChild(noRes);
         }
 
-        wordsArray.forEach(cleanText => {
+        words.forEach(word => {
+            const cleanText = word.text;
             const wordBtn = document.createElement('button');
             wordBtn.innerText = cleanText;
-            wordBtn.style.cssText = `background: #e0e0e0; border: 1px solid #999; padding: 8px 12px; border-radius: 6px; cursor: pointer; color: #333; font-weight: bold; font-size: 14px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);`;
+            wordBtn.style.cssText = `background: #e0e0e0; border: 1px solid #999; padding: 8px 12px; border-radius: 6px; cursor: pointer; color: #333; font-weight: bold; font-size: 14px;`;
             
             wordBtn.addEventListener('click', () => {
                 navigator.clipboard.writeText(cleanText);
