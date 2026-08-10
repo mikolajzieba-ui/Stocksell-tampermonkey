@@ -7,6 +7,8 @@
 // @match        *://*.stocksell.io/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=stocksell.io
 // @grant        none
+// @downloadURL  https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Stocksell-podliczanie-stocków.user.js
+// @updateURL    https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Stocksell-podliczanie-stocków.user.js
 // ==/UserScript==
 
 (function() {
