@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         StockSell - Skaner API (Wersja 9.0 - OCR.space)
+// @name         StockSell - Skaner API (Wersja 10.0 - High Res & Engine 2)
 // @namespace    http://tampermonkey.net/
-// @version      9.0
-// @description  Skaner z dużym oknem wysyłający obraz do zewnętrznego API OCR.space
+// @version      10.0
+// @description  Wysoka rozdzielczość aparatu, AI Upscale i silnik Paragonowy (OCR.space)
 // @match        https://*.stocksell.io/*
 // @grant        GM_xmlhttpRequest
 // @connect      api.ocr.space
@@ -12,7 +12,7 @@
     'use strict';
 
     // === TUTAJ WKLEJ SWÓJ DARMOWY KLUCZ Z OCR.SPACE ===
-    const API_KEY = 'K86420622288957'; 
+    const API_KEY = 'TUTAJ_WKLEJ_SWOJ_KLUCZ'; 
 
     function tryInjectUI() {
         const targetInput = document.getElementById('searchSkuCode');
@@ -23,7 +23,7 @@
 
         const camBtn = document.createElement('button');
         camBtn.id = 'btn-camera-ocr';
-        camBtn.innerText = '📷 Skanuj bez celowania (API)';
+        camBtn.innerText = '📷 Skanuj naklejkę (Wysoka Jakość)';
         camBtn.style.cssText = 'margin-top: 15px; width: 100%; padding: 10px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;';
         
         const uiContainer = document.createElement('div');
@@ -50,9 +50,9 @@
         video.setAttribute('autoplay', '');
         video.setAttribute('playsinline', ''); 
         
-        // DUŻE, WYGODNE OKNO - wystarczy objąć naklejkę z grubsza
+        // DUŻE, WYGODNE OKNO - 80% wysokości wideo, by objąć wszystko na luzie
         const overlay = document.createElement('div');
-        overlay.style.cssText = 'position: absolute; top: 20%; left: 5%; width: 90%; height: 60%; border: 2px solid #4CAF50; box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.4); box-sizing: border-box; z-index: 10; pointer-events: none;';
+        overlay.style.cssText = 'position: absolute; top: 10%; left: 5%; width: 90%; height: 80%; border: 2px solid #4CAF50; box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.4); box-sizing: border-box; z-index: 10; pointer-events: none;';
 
         videoWrapper.appendChild(video);
         videoWrapper.appendChild(overlay);
@@ -64,7 +64,7 @@
 
         const statusText = document.createElement('p');
         statusText.style.cssText = 'margin: 10px 0; font-weight: bold; color: #333;';
-        statusText.innerText = 'Uruchamianie kamery...';
+        statusText.innerText = 'Uruchamianie kamery (wysoka rozdzielczość)...';
 
         container.appendChild(videoWrapper);
         container.appendChild(captureBtn);
@@ -72,7 +72,16 @@
 
         let stream;
         try {
-            stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+            // WYMUSZAMY WYSOKĄ ROZDZIELCZOŚĆ (np. Full HD / 4K)
+            const constraints = {
+                video: {
+                    facingMode: 'environment',
+                    width: { ideal: 2560 },
+                    height: { ideal: 1440 },
+                    advanced: [{ focusMode: "continuous" }]
+                }
+            };
+            stream = await navigator.mediaDevices.getUserMedia(constraints);
             video.srcObject = stream;
         } catch (err) {
             statusText.innerText = 'Błąd dostępu do kamery!';
@@ -82,32 +91,37 @@
 
         video.onplaying = () => {
             captureBtn.style.display = 'block';
-            statusText.innerText = 'Złap naklejkę w zielone okno i kliknij przycisk.';
+            statusText.innerText = 'Obejmij naklejkę i zrób zdjęcie.';
         };
 
         captureBtn.addEventListener('click', async (e) => {
             e.preventDefault();
             captureBtn.disabled = true;
-            statusText.innerText = 'Wysyłanie do inteligentnego serwera OCR...';
+            statusText.innerText = 'Wysyłanie do serwera (to potrwa sekundę)...';
             
             const cropX = video.videoWidth * 0.05;
-            const cropY = video.videoHeight * 0.20;
+            const cropY = video.videoHeight * 0.10;
             const cropW = video.videoWidth * 0.90;
-            const cropH = video.videoHeight * 0.60;
+            const cropH = video.videoHeight * 0.80;
 
             const canvas = document.createElement('canvas');
             canvas.width = cropW;
             canvas.height = cropH;
             const ctx = canvas.getContext('2d');
+            
+            // Poprawiamy wygładzanie
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
             ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
             
             stream.getTracks().forEach(track => track.stop());
             videoWrapper.remove(); 
             captureBtn.remove();
 
-            const base64Image = canvas.toDataURL('image/jpeg');
+            // KONWERSJA DO JPG (jakość 80% zapobiega błędowi "File too large" w OCR.space)
+            const base64Image = canvas.toDataURL('image/jpeg', 0.80);
 
-            // Wysyłanie bezpiecznego zapytania przez Tampermonkey do zewnętrznego API
+            // WYSYŁKA DO API Z NOWYMI PARAMETRAMI (Engine 2 + Scale)
             GM_xmlhttpRequest({
                 method: "POST",
                 url: "https://api.ocr.space/parse/image",
@@ -115,21 +129,21 @@
                     "apikey": API_KEY,
                     "Content-Type": "application/x-www-form-urlencoded"
                 },
-                data: "base64Image=" + encodeURIComponent(base64Image) + "&language=eng&isOverlayRequired=false&filetype=JPG",
+                // Dodane: scale=true (serwer powiększa) oraz OCREngine=2 (lepszy do cyfr i znaków)
+                data: "base64Image=" + encodeURIComponent(base64Image) + "&language=eng&isOverlayRequired=false&scale=true&OCREngine=2&filetype=JPG",
                 onload: function(response) {
                     try {
                         const json = JSON.parse(response.responseText);
                         if (json.ParsedResults && json.ParsedResults[0]) {
                             const fullText = json.ParsedResults[0].ParsedText;
-                            // Dzielimy tekst na pojedyncze linie/słowa
                             const words = fullText.split(/[\s\n]+/).filter(w => w.trim().length > 4);
                             displayResults(words, container, inputElement);
-                            statusText.innerText = 'Kliknij odpowiedni kod, aby go wkleić:';
+                            statusText.innerText = 'Wybierz kod:';
                         } else {
-                            statusText.innerText = 'API nie zwróciło wyników. Spróbuj ponownie.';
+                            statusText.innerText = 'Nie znaleziono tekstu. Być może obraz był poruszony.';
                         }
                     } catch(e) {
-                        statusText.innerText = 'Błąd odpowiedzi serwera.';
+                        statusText.innerText = 'Błąd odpowiedzi serwera OCR.';
                     }
                     btnElement.disabled = false;
                 },
@@ -147,12 +161,14 @@
 
         if (wordsArray.length === 0) {
             const noRes = document.createElement('span');
-            noRes.innerText = 'Nie rozpoznano tekstu.';
+            noRes.innerText = 'Brak czytelnego tekstu.';
             resultsDiv.appendChild(noRes);
         }
 
-        wordsArray.forEach(text => {
-            // Czyszczenie drobnych śmieci interpunkcyjnych na końcach wyrazów
+        // Filtrujemy wyniki, aby usunąć powtórzenia i śmieci
+        const uniqueWords = [...new Set(wordsArray)];
+
+        uniqueWords.forEach(text => {
             const cleanText = text.replace(/[^a-zA-Z0-9-]/g, '');
             if (cleanText.length < 4) return;
 
