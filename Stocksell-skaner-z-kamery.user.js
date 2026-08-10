@@ -8,7 +8,7 @@
 // @grant        none
 // @downloadURL  https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Stocksell-skaner-z-kamery.user.js
 // @updateURL    https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Stocksell-skaner-z-kamery.user.js
-// ==UserScript==
+// ==/UserScript==
 
 (function() {
     'use strict';
@@ -29,11 +29,11 @@
         camBtn.id = 'btn-camera-ocr';
         camBtn.innerText = '📷 Szukaj kamerką';
         camBtn.style.cssText = 'margin-top: 15px; width: 100%; padding: 10px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;';
-        
+
         // Kontener na interfejs kamery i wyniki
         const uiContainer = document.createElement('div');
         uiContainer.style.cssText = 'margin-top: 15px; text-align: center; display: flex; flex-direction: column; align-items: center;';
-        
+
         cardContainer.appendChild(camBtn);
         cardContainer.appendChild(uiContainer);
 
@@ -52,7 +52,7 @@
         video.style.cssText = 'width: 100%; max-width: 300px; border-radius: 8px; border: 2px solid #ccc;';
         video.setAttribute('autoplay', '');
         video.setAttribute('playsinline', ''); // Ważne dla iOS
-        
+
         const statusText = document.createElement('p');
         statusText.style.cssText = 'margin: 10px 0; font-weight: bold; color: #333;';
         statusText.innerText = 'Uruchamianie kamery...';
@@ -75,7 +75,7 @@
         video.onplaying = () => {
             let timeLeft = 2;
             statusText.innerText = `Robienie zdjęcia za: ${timeLeft}s`;
-            
+
             const timer = setInterval(async () => {
                 timeLeft -= 1;
                 if (timeLeft > 0) {
@@ -83,17 +83,17 @@
                 } else {
                     clearInterval(timer);
                     statusText.innerText = 'Przetwarzanie obrazu (OCR)...';
-                    
+
                     // Zrobienie zdjęcia na wirtualne płótno (canvas)
                     const canvas = document.createElement('canvas');
                     canvas.width = video.videoWidth;
                     canvas.height = video.videoHeight;
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                    
+
                     // Zatrzymanie kamery
                     stream.getTracks().forEach(track => track.stop());
-                    video.remove(); 
+                    video.remove();
 
                     // Wykonanie OCR
                     try {
@@ -127,17 +127,17 @@
             const wordBtn = document.createElement('button');
             wordBtn.innerText = word.text;
             wordBtn.style.cssText = 'background: #e0e0e0; border: 1px solid #999; padding: 5px 10px; border-radius: 4px; cursor: pointer; color: #333;';
-            
+
             wordBtn.addEventListener('click', () => {
                 // Skopiowanie do schowka
                 navigator.clipboard.writeText(word.text);
-                
+
                 // Wklejenie do inputa Angularowego
                 inputElement.value = word.text;
                 // Wyzwolenie eventów, by Angular zaktualizował stan formularza
                 inputElement.dispatchEvent(new Event('input', { bubbles: true }));
                 inputElement.dispatchEvent(new Event('change', { bubbles: true }));
-                
+
                 // Wizualne potwierdzenie
                 wordBtn.style.background = '#4CAF50';
                 wordBtn.style.color = 'white';
@@ -146,7 +146,7 @@
                     wordBtn.style.color = '#333';
                 }, 1000);
             });
-            
+
             resultsDiv.appendChild(wordBtn);
         });
 
@@ -157,7 +157,7 @@
     const observer = new MutationObserver(() => {
         tryInjectUI();
     });
-    
+
     observer.observe(document.body, { childList: true, subtree: true });
 
 })();
