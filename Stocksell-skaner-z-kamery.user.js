@@ -8,6 +8,7 @@
 // @grant        none
 // @downloadURL  https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Stocksell-skaner-z-kamery.user.js
 // @updateURL    https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Stocksell-skaner-z-kamery.user.js
+// ==UserScript==
 
 (function() {
     'use strict';
