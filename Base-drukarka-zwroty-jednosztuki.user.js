@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      2.0
+// @version      2.1
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -55,7 +55,7 @@
             function playBeep(freq, startTime, duration) {
                 const osc = ctx.createOscillator();
                 const gain = ctx.createGain();
-                osc.type = 'square'; // Kwadratowa fala daje bardziej "ostrzegawczy" ton
+                osc.type = 'square';
                 osc.frequency.setValueAtTime(freq, startTime);
                 gain.gain.setValueAtTime(0.1, startTime);
                 gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
@@ -66,8 +66,8 @@
             }
 
             const now = ctx.currentTime;
-            playBeep(300, now, 0.15);      // Pierwszy wyższy ton
-            playBeep(200, now + 0.15, 0.2); // Drugi niższy ton
+            playBeep(300, now, 0.15);
+            playBeep(200, now + 0.15, 0.2);
         } catch (e) {
             console.error("Web Audio API nie jest wspierane", e);
         }
@@ -415,7 +415,6 @@
 
         const reprintBtn = document.createElement("button");
         reprintBtn.innerHTML = "🖨️ Wydrukuj ostatni kod";
-        // Zastosowano jaskrawe, niebieskie kolory dla przycisku, wyróżniające się w obu motywach
         reprintBtn.style.cssText = `
             margin-top: 15px; width: 100%; padding: 14px; font-size: 16px;
             background-color: #3b82f6; color: #ffffff; border: none;
@@ -430,7 +429,7 @@
 
         leftCol.append(title, returnsStatusEl, productsStatusEl, printerStatusEl, scanCounterEl, input, reprintBtn, resultEl);
 
-        // PRAWA KOLUMNA (Rozciągnięta na wysokość)
+        // PRAWA KOLUMNA
         const rightCol = document.createElement("div");
         rightCol.style.cssText = `flex: 1; border-left: 1px solid var(--border-color); padding-left: 40px; display: flex; flex-direction: column; height: 100%;`;
 
@@ -492,17 +491,20 @@
             if (lastPrintedCode && lastPrintedTitle) {
                 if (!printerReady) {
                     playErrorSound();
-                    resultEl.style.color = "#ef4444";
-                    resultEl.innerText = "❌ Brak połączenia z drukarką!";
+                    resultEl.style.color = "";
+                    resultEl.innerHTML = `<div style="color: #ef4444;">❌ Brak połączenia z drukarką!</div>`;
                     return;
                 }
                 printLabel(lastPrintedTitle, lastPrintedCode);
-                resultEl.style.color = "#10b981";
-                resultEl.innerText = `✔️ Wydrukowano ponownie: ${lastPrintedCode}`;
+                resultEl.style.color = "";
+                resultEl.innerHTML = `
+                    <div style="color: #10b981; font-size: 18px; margin-bottom: 12px;">✔️ Wydrukowano ponownie: ${lastPrintedCode}</div>
+                    <div style="color: var(--text-main); font-size: 22px; line-height: 1.4; padding: 0 10px;">${lastPrintedTitle}</div>
+                `;
             } else {
                 playErrorSound();
-                resultEl.style.color = "#ef4444";
-                resultEl.innerText = "❌ Brak kodu do ponownego wydruku!";
+                resultEl.style.color = "";
+                resultEl.innerHTML = `<div style="color: #ef4444;">❌ Brak kodu do ponownego wydruku!</div>`;
             }
             setTimeout(() => input.focus(), 100);
         };
@@ -519,8 +521,8 @@
 
                 if (!retData) {
                     playErrorSound();
-                    resultEl.style.color = "#ef4444";
-                    resultEl.innerText = `❌ Nie znaleziono przesyłki w bazie.`;
+                    resultEl.style.color = "";
+                    resultEl.innerHTML = `<div style="color: #ef4444;">❌ Nie znaleziono przesyłki w bazie.</div>`;
                     addScanToHistory(trackingInput, "-", "Brak przesyłki w 'zgłoszone'", "error");
                     setTimeout(() => sendLogToSheet("-", trackingInput, "nie znaleziono"), 10);
                     return;
@@ -528,8 +530,8 @@
 
                 if (retData.accepted !== "tak") {
                     playErrorSound();
-                    resultEl.style.color = "#f59e0b";
-                    resultEl.innerText = `⚠️ Zwrot: ${retData.return_nr} | Odrzucono (nie do przyjęcia)`;
+                    resultEl.style.color = "";
+                    resultEl.innerHTML = `<div style="color: #f59e0b;">⚠️ Zwrot: ${retData.return_nr} | Odrzucono (nie do przyjęcia)</div>`;
                     addScanToHistory(trackingInput, "-", `Odrzucono (Zwrot ${retData.return_nr})`, "error");
                     setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "nie"), 10);
                     return;
@@ -537,8 +539,8 @@
 
                 if (!retData.print_code) {
                     playErrorSound();
-                    resultEl.style.color = "#ef4444";
-                    resultEl.innerText = `❌ Zwrot: ${retData.return_nr} | Brak kodu w 'zgłoszone'`;
+                    resultEl.style.color = "";
+                    resultEl.innerHTML = `<div style="color: #ef4444;">❌ Zwrot: ${retData.return_nr} | Brak kodu w 'zgłoszone'</div>`;
                     addScanToHistory(trackingInput, "-", `Brak SKU w zgłoszone (${retData.return_nr})`, "error");
                     setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "tak"), 10);
                     return;
@@ -557,8 +559,8 @@
                         if (!retData.title && product.title) finalTitle = product.title;
                     } else {
                         playErrorSound();
-                        resultEl.style.color = "#ef4444";
-                        resultEl.innerText = `❌ Zwrot: ${retData.return_nr} | Brak SKU w bazie produktów: ${rawCode}`;
+                        resultEl.style.color = "";
+                        resultEl.innerHTML = `<div style="color: #ef4444;">❌ Zwrot: ${retData.return_nr} | Brak SKU w bazie produktów: ${rawCode}</div>`;
                         addScanToHistory(trackingInput, "-", `Brak w bazie prod: ${rawCode}`, "error");
                         setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "tak"), 10);
                         return;
@@ -567,15 +569,18 @@
 
                 if (!printerReady) {
                     playErrorSound();
-                    resultEl.style.color = "#ef4444";
-                    resultEl.innerText = "❌ Brak połączenia z drukarką!";
+                    resultEl.style.color = "";
+                    resultEl.innerHTML = `<div style="color: #ef4444;">❌ Brak połączenia z drukarką!</div>`;
                     addScanToHistory(trackingInput, cleanCode, "Brak drukarki", "error");
                     setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "tak"), 10);
                     return;
                 }
 
-                resultEl.style.color = "#10b981";
-                resultEl.innerText = `✔️ Drukowanie: ${cleanCode}`;
+                resultEl.style.color = "";
+                resultEl.innerHTML = `
+                    <div style="color: #10b981; font-size: 18px; margin-bottom: 12px;">✔️ Drukowanie: ${cleanCode}</div>
+                    <div style="color: var(--text-main); font-size: 22px; line-height: 1.4; padding: 0 10px;">${finalTitle}</div>
+                `;
 
                 // Zapamiętanie ostatniego kodu do ponownego wydruku
                 lastPrintedCode = cleanCode;
