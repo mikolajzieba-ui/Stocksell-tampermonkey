@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      1.8
+// @version      1.9
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -107,7 +107,7 @@
         const today = new Date().toLocaleDateString('pl-PL');
         const cacheKey = `return_scan_count_${today}`;
         const currentCount = GM_getValue(cacheKey, 0);
-        scanCounterEl.innerHTML = `📊 Przetworzone zwroty dziś: <span style="font-size: 15px; font-weight: 800; color: #3b82f6;">${currentCount}</span>`;
+        //scanCounterEl.innerHTML = `📊 Przetworzone zwroty dziś: <span style="font-size: 15px; font-weight: 800; color: #3b82f6;">${currentCount}</span>`;
     }
 
     function incrementScanCounter() {
