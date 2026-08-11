@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      2.2
+// @version      2.3
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -10,8 +10,6 @@
 // @connect      script.googleusercontent.com
 // @connect      localhost
 // @connect      127.0.0.1
-// @downloadURL  https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Base-drukarka-zwroty-jednosztuki.user.js
-// @updateURL    https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Base-drukarka-zwroty-jednosztuki.user.js
 // ==/UserScript==
 
 (function () {
@@ -37,10 +35,11 @@
     let scanCounterEl = null;
     let refreshBtn = null;
     let historyContainer = null;
-
+    
     // Zmienne do ponownego wydruku
     let lastPrintedCode = null;
     let lastPrintedTitle = null;
+    let lastPrintedImage = null; // Nowa zmienna na obrazek
 
     let recentScans = JSON.parse(GM_getValue("returns_recent_scans_v1", "[]"));
     let currentTheme = GM_getValue("stocksell_theme", "dark");
@@ -51,11 +50,11 @@
     function playErrorSound() {
         try {
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
-
+            
             function playBeep(freq, startTime, duration) {
                 const osc = ctx.createOscillator();
                 const gain = ctx.createGain();
-                osc.type = 'square';
+                osc.type = 'square'; 
                 osc.frequency.setValueAtTime(freq, startTime);
                 gain.gain.setValueAtTime(0.1, startTime);
                 gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
@@ -66,8 +65,8 @@
             }
 
             const now = ctx.currentTime;
-            playBeep(300, now, 0.15);
-            playBeep(200, now + 0.15, 0.2);
+            playBeep(300, now, 0.15);      
+            playBeep(200, now + 0.15, 0.2); 
         } catch (e) {
             console.error("Web Audio API nie jest wspierane", e);
         }
@@ -108,7 +107,7 @@
                 color: var(--text-main); background: var(--input-bg);
             }
             .stocksell-input:focus { border-color: #3b82f6; }
-
+            
             /* Stylowanie paska przewijania dla historii */
             .stocksell-scroll::-webkit-scrollbar { width: 8px; }
             .stocksell-scroll::-webkit-scrollbar-track { background: transparent; }
@@ -416,14 +415,14 @@
         const reprintBtn = document.createElement("button");
         reprintBtn.innerHTML = "🖨️ Wydrukuj ostatni kod";
         reprintBtn.style.cssText = `
-            margin-top: 15px; width: 100%; padding: 14px; font-size: 16px;
-            background-color: #3b82f6; color: #ffffff; border: none;
-            border-radius: 8px; cursor: pointer; font-weight: bold;
+            margin-top: 15px; width: 100%; padding: 14px; font-size: 16px; 
+            background-color: #3b82f6; color: #ffffff; border: none; 
+            border-radius: 8px; cursor: pointer; font-weight: bold; 
             transition: all 0.2s; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         `;
         reprintBtn.onmouseover = () => reprintBtn.style.backgroundColor = "#2563eb";
         reprintBtn.onmouseout = () => reprintBtn.style.backgroundColor = "#3b82f6";
-
+        
         const resultEl = document.createElement("div");
         resultEl.style.cssText = `margin-top: 25px; font-size: 18px; font-weight: bold; min-height: 30px; text-align: center;`;
 
@@ -500,7 +499,7 @@
                 return lastAlertColor;
             }
         }
-
+        
         function resetDynamicColor() {
             lastAlertType = null;
             lastAlertColor = null;
@@ -525,13 +524,22 @@
                     resultEl.innerHTML = `<div style="color: ${color};">❌ Brak połączenia z drukarką!</div>`;
                     return;
                 }
-
+                
                 resetDynamicColor();
                 printLabel(lastPrintedTitle, lastPrintedCode);
+                
+                let imgHtml = "";
+                if (lastPrintedImage) {
+                    imgHtml = `<div style="margin-top: 20px; text-align: center;">
+                        <img src="${lastPrintedImage}" onerror="this.style.display='none'" style="max-height: 280px; max-width: 100%; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); object-fit: contain;">
+                    </div>`;
+                }
+
                 resultEl.style.color = "";
                 resultEl.innerHTML = `
                     <div style="color: #10b981; font-size: 18px; margin-bottom: 12px;">✔️ Wydrukowano ponownie: ${lastPrintedCode}</div>
                     <div style="color: var(--text-main); font-size: 22px; line-height: 1.4; padding: 0 10px;">${lastPrintedTitle}</div>
+                    ${imgHtml}
                 `;
             } else {
                 playErrorSound();
@@ -585,6 +593,7 @@
                 let rawCode = retData.print_code.trim();
                 let cleanCode = "";
                 let finalTitle = retData.title ? retData.title : `Zwrot ${retData.return_nr}`;
+                let finalImage = retData.image_url ? retData.image_url : null;
 
                 if (rawCode.toLowerCase().startsWith("stocksell_")) {
                     cleanCode = rawCode.replace(/stocksell_/gi, '');
@@ -615,19 +624,29 @@
                 }
 
                 resetDynamicColor();
+                
+                let imgHtml = "";
+                if (finalImage) {
+                    imgHtml = `<div style="margin-top: 20px; text-align: center;">
+                        <img src="${finalImage}" onerror="this.style.display='none'" style="max-height: 280px; max-width: 100%; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); object-fit: contain;">
+                    </div>`;
+                }
+
                 resultEl.style.color = "";
                 resultEl.innerHTML = `
                     <div style="color: #10b981; font-size: 18px; margin-bottom: 12px;">✔️ Drukowanie: ${cleanCode}</div>
                     <div style="color: var(--text-main); font-size: 22px; line-height: 1.4; padding: 0 10px;">${finalTitle}</div>
+                    ${imgHtml}
                 `;
 
-                // Zapamiętanie ostatniego kodu do ponownego wydruku
+                // Zapamiętanie ostatniego kodu i zdjęcia do ponownego wydruku
                 lastPrintedCode = cleanCode;
                 lastPrintedTitle = finalTitle;
+                lastPrintedImage = finalImage;
 
                 printLabel(finalTitle, cleanCode);
                 addScanToHistory(trackingInput, cleanCode, finalTitle, "success");
-
+                
                 setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "tak"), 10);
             }
         });
