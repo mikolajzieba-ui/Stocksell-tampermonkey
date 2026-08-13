@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      2.3
+// @version      2.4
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -39,7 +39,7 @@
     // Zmienne do ponownego wydruku
     let lastPrintedCode = null;
     let lastPrintedTitle = null;
-    let lastPrintedImage = null; // Nowa zmienna na obrazek
+    let lastPrintedImage = null;
 
     let recentScans = JSON.parse(GM_getValue("returns_recent_scans_v1", "[]"));
     let currentTheme = GM_getValue("stocksell_theme", "dark");
@@ -118,7 +118,7 @@
     }
 
     //////////////////////////////////////////////////////
-    // LOGOWANIE DO ARKUSZA
+    // LOGOWANIE DO ARKUSZA (BEZ CIASTECZEK)
     //////////////////////////////////////////////////////
     function sendLogToSheet(returnNr, tracking, scanStatus) {
         if (!RETURNS_API_URL) return;
@@ -128,6 +128,7 @@
         GM_xmlhttpRequest({
             method: "POST",
             url: RETURNS_API_URL,
+            anonymous: true, // Zabezpieczenie przed błędem ciasteczek Google
             headers: { "Content-Type": "application/json" },
             data: JSON.stringify({
                 timestamp: timestamp,
@@ -146,7 +147,7 @@
         const today = new Date().toLocaleDateString('pl-PL');
         const cacheKey = `return_scan_count_${today}`;
         const currentCount = GM_getValue(cacheKey, 0);
-        //scanCounterEl.innerHTML = `📊 Przetworzone zwroty dziś: <span style="font-size: 18px; font-weight: 800; color: #3b82f6;">${currentCount}</span>`;
+        scanCounterEl.innerHTML = `📊 Przetworzone zwroty dziś: <span style="font-size: 18px; font-weight: 800; color: #3b82f6;">${currentCount}</span>`;
     }
 
     function incrementScanCounter() {
@@ -158,7 +159,7 @@
     }
 
     //////////////////////////////////////////////////////
-    // HISTORIA SKANÓW
+    // HISTORIA SKANÓW (BEZPIECZNE ZARZĄDZANIE PAMIĘCIĄ)
     //////////////////////////////////////////////////////
     function updateRecentScansUI() {
         if (!historyContainer) return;
@@ -188,13 +189,14 @@
 
     function addScanToHistory(tracking, printCode, title, status) {
         recentScans.unshift({ tracking, printCode, title, status });
-        if (recentScans.length > 50) recentScans.pop();
+        // Twarde wymuszenie obcięcia bazy do 50 elementów (zabezpieczenie przed memory leakiem)
+        recentScans = recentScans.slice(0, 50); 
         GM_setValue("returns_recent_scans_v1", JSON.stringify(recentScans));
         updateRecentScansUI();
     }
 
     //////////////////////////////////////////////////////
-    // POBIERANIE BAZY ZWROTÓW
+    // POBIERANIE BAZY ZWROTÓW (BEZ CIASTECZEK)
     //////////////////////////////////////////////////////
     function preloadReturns(forceRefresh = false) {
         if (!RETURNS_API_URL) return;
@@ -226,6 +228,7 @@
         GM_xmlhttpRequest({
             method: "GET",
             url: RETURNS_API_URL,
+            anonymous: true, // Zabezpieczenie przed błędem ciasteczek Google
             onload: function (res) {
                 try {
                     const returns = JSON.parse(res.responseText);
@@ -246,7 +249,7 @@
     }
 
     //////////////////////////////////////////////////////
-    // POBIERANIE BAZY PRODUKTÓW
+    // POBIERANIE BAZY PRODUKTÓW (BEZ CIASTECZEK)
     //////////////////////////////////////////////////////
     function preloadProducts(forceRefresh = false) {
         if (!PRODUCTS_API_URL) return;
@@ -276,6 +279,7 @@
         GM_xmlhttpRequest({
             method: "GET",
             url: PRODUCTS_API_URL + "?all=1",
+            anonymous: true, // Zabezpieczenie przed błędem ciasteczek Google
             onload: function (res) {
                 try {
                     const products = JSON.parse(res.responseText);
@@ -428,7 +432,7 @@
 
         leftCol.append(title, returnsStatusEl, productsStatusEl, printerStatusEl, scanCounterEl, input, reprintBtn, resultEl);
 
-        // PRAWA KOLUMNA (Rozciągnięta na wysokość)
+        // PRAWA KOLUMNA 
         const rightCol = document.createElement("div");
         rightCol.style.cssText = `flex: 1; border-left: 1px solid var(--border-color); padding-left: 40px; display: flex; flex-direction: column; height: 100%;`;
 
@@ -485,7 +489,7 @@
                 if (lastAlertType === "rejected") {
                     lastAlertColor = (lastAlertColor === "#f59e0b") ? "#ef4444" : "#f59e0b";
                 } else {
-                    lastAlertColor = "#f59e0b"; // Żółty startowy dla odrzuconych
+                    lastAlertColor = "#f59e0b"; 
                 }
                 lastAlertType = "rejected";
                 return lastAlertColor;
@@ -493,7 +497,7 @@
                 if (lastAlertType === "error") {
                     lastAlertColor = (lastAlertColor === "#ef4444") ? "#f59e0b" : "#ef4444";
                 } else {
-                    lastAlertColor = "#ef4444"; // Czerwony startowy dla błędów
+                    lastAlertColor = "#ef4444"; 
                 }
                 lastAlertType = "error";
                 return lastAlertColor;
