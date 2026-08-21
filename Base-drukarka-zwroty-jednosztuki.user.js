@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      3.1.1
+// @version      3.2.0
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -57,6 +57,7 @@
     let currentTheme = GM_getValue("stocksell_theme", "dark");
     let statusSyncInProgress = false;
     let returnsLoading = false;
+    let printJobSequence = 0;
 
     //////////////////////////////////////////////////////
     // DŹWIĘK BŁĘDU (Generowany z przeglądarki)
@@ -527,31 +528,126 @@
                     const printer = data.printer.find(p => p.name);
                     if (!printer) throw "Brak drukarki";
                     zebraDeviceObj = printer; printerReady = true;
+                    console.info("[ZEBRA TIMING] Wykryto drukarkę", {
+                        name: String(printer.name || "nieznana"),
+                        connection: String(printer.connection || "nieznane"),
+                        deviceType: String(printer.deviceType || "nieznany")
+                    });
                     if(printerStatusEl) printerStatusEl.innerText = `🖨️ Zebra połączona`;
                 } catch (e) {
+                    console.error("[ZEBRA TIMING] Nie udało się rozpoznać drukarki", e);
                     if(printerStatusEl) printerStatusEl.innerText = "❌ Brak drukarki";
                     setTimeout(initPrinter, 5000);
                 }
             },
-            onerror: () => { if(printerStatusEl) printerStatusEl.innerText = "❌ Błąd łączności"; setTimeout(initPrinter, 5000); },
-            ontimeout: () => { if(printerStatusEl) printerStatusEl.innerText = "❌ Timeout"; setTimeout(initPrinter, 5000); }
+            onerror: () => {
+                console.error("[ZEBRA TIMING] Błąd połączenia z localhost:9100/available");
+                if(printerStatusEl) printerStatusEl.innerText = "❌ Błąd łączności";
+                setTimeout(initPrinter, 5000);
+            },
+            ontimeout: () => {
+                console.error("[ZEBRA TIMING] Timeout localhost:9100/available");
+                if(printerStatusEl) printerStatusEl.innerText = "❌ Timeout";
+                setTimeout(initPrinter, 5000);
+            }
         });
+    }
+
+    function monotonicNow() {
+        return window.performance && typeof window.performance.now === "function"
+            ? window.performance.now()
+            : Date.now();
+    }
+
+    function roundTiming(value) {
+        return Math.round(Number(value || 0) * 10) / 10;
+    }
+
+    function formatPrintDuration(milliseconds) {
+        const value = Number(milliseconds || 0);
+        if (value < 1000) return `${Math.round(value)} ms`;
+        return `${(value / 1000).toFixed(2).replace(".", ",")} s`;
+    }
+
+    function printTimingHtml(timing) {
+        if (!timing) return "";
+
+        return `
+            <div style="margin-top: 10px; color: var(--text-muted); font-size: 14px;">
+                ⏱️ Przekazanie zadania: <strong>${formatPrintDuration(timing.total_ms)}</strong>
+                (ZPL: ${formatPrintDuration(timing.zpl_ms)},
+                usługa: ${formatPrintDuration(timing.bridge_ms)})
+            </div>
+        `;
     }
 
     function printLabel(title, code) {
         return new Promise((resolve, reject) => {
+            const jobId = ++printJobSequence;
+            const startedMs = monotonicNow();
+            const startedAt = new Date().toISOString();
+            const printerName = String(zebraDeviceObj && zebraDeviceObj.name || "nieznana");
+            const printerConnection = String(
+                zebraDeviceObj && (zebraDeviceObj.connection || zebraDeviceObj.deviceType) || "nieznane"
+            );
+            let zplMs = 0;
+            let requestStartedMs = null;
+
+            function createTiming(phase, httpStatus) {
+                const finishedMs = monotonicNow();
+                return {
+                    job_id: jobId,
+                    code: String(code || ""),
+                    phase: phase,
+                    started_at: startedAt,
+                    finished_at: new Date().toISOString(),
+                    printer: printerName,
+                    connection: printerConnection,
+                    http_status: Number(httpStatus || 0),
+                    zpl_ms: roundTiming(zplMs),
+                    bridge_ms: requestStartedMs === null
+                        ? 0
+                        : roundTiming(finishedMs - requestStartedMs),
+                    total_ms: roundTiming(finishedMs - startedMs)
+                };
+            }
+
+            function failPrint(message, phase, httpStatus) {
+                const timing = createTiming(phase, httpStatus);
+                const error = new Error(message);
+                error.printTiming = timing;
+                console.error(`[ZEBRA TIMING #${jobId}] ${message}`, timing);
+                reject(error);
+            }
+
+            console.info(`[ZEBRA TIMING #${jobId}] Start zadania`, {
+                code: String(code || ""),
+                started_at: startedAt,
+                printer: printerName,
+                connection: printerConnection
+            });
+
             if (!printerReady || !zebraDeviceObj) {
-                reject(new Error("Brak połączenia z drukarką Zebra"));
+                failPrint("Brak połączenia z drukarką Zebra", "printer_not_ready", 0);
                 return;
             }
 
             let zpl;
+            const zplStartedMs = monotonicNow();
             try {
                 zpl = createZPL(title, code);
+                zplMs = monotonicNow() - zplStartedMs;
             } catch (error) {
-                reject(error);
+                zplMs = monotonicNow() - zplStartedMs;
+                failPrint(error.message || String(error), "zpl_error", 0);
                 return;
             }
+
+            requestStartedMs = monotonicNow();
+            console.info(`[ZEBRA TIMING #${jobId}] Wysyłanie do localhost:9100`, {
+                zpl_ms: roundTiming(zplMs),
+                zpl_characters: zpl.length
+            });
 
             GM_xmlhttpRequest({
                 method: "POST",
@@ -561,19 +657,28 @@
                 data: JSON.stringify({ device: zebraDeviceObj, data: zpl }),
                 onload: response => {
                     if (response.status >= 200 && response.status < 300) {
-                        resolve(response);
+                        const timing = createTiming("accepted_by_print_service", response.status);
+                        console.info(
+                            `[ZEBRA TIMING #${jobId}] Usługa przyjęła zadanie w ${formatPrintDuration(timing.total_ms)}`,
+                            timing
+                        );
+                        resolve(timing);
                     } else {
-                        reject(new Error(`Drukarka zwróciła HTTP ${response.status}`));
+                        failPrint(
+                            `Drukarka zwróciła HTTP ${response.status}`,
+                            "http_error",
+                            response.status
+                        );
                     }
                 },
                 onerror: () => {
                     printerReady = false;
-                    reject(new Error("Błąd połączenia z drukarką"));
+                    failPrint("Błąd połączenia z drukarką", "connection_error", 0);
                     setTimeout(initPrinter, 1000);
                 },
                 ontimeout: () => {
                     printerReady = false;
-                    reject(new Error("Przekroczono czas oczekiwania na drukarkę"));
+                    failPrint("Przekroczono czas oczekiwania na drukarkę", "timeout", 0);
                     setTimeout(initPrinter, 1000);
                 }
             });
@@ -796,12 +901,16 @@
                 resultEl.style.color = "";
                 resultEl.innerHTML = `<div style="color: #3b82f6;">🖨️ Ponowne drukowanie ${lastPrintedCode}...</div>`;
 
+                let reprintTiming = null;
                 try {
-                    await printLabel(lastPrintedTitle, lastPrintedCode);
+                    reprintTiming = await printLabel(lastPrintedTitle, lastPrintedCode);
                 } catch (error) {
                     playErrorSound();
                     const color = getDynamicColor("error");
-                    resultEl.innerHTML = `<div style="color: ${color};">❌ ${error.message}</div>`;
+                    resultEl.innerHTML = `
+                        <div style="color: ${color};">❌ ${error.message}</div>
+                        ${printTimingHtml(error.printTiming)}
+                    `;
                     setTimeout(() => input.focus(), 100);
                     return;
                 }
@@ -817,6 +926,7 @@
                 resultEl.innerHTML = `
                     <div style="color: #10b981; font-size: 18px; margin-bottom: 12px;">✔️ Wydrukowano ponownie: ${lastPrintedCode}</div>
                     <div style="color: var(--text-main); font-size: 22px; line-height: 1.4; padding: 0 10px;">${lastPrintedTitle}</div>
+                    ${printTimingHtml(reprintTiming)}
                     ${imgHtml}
                 `;
             } else {
@@ -917,14 +1027,18 @@
                     ${imgHtml}
                 `;
 
+                let printTiming = null;
                 try {
                     // Dopiero HTTP 2xx z lokalnej usługi Zebra oznacza przyjęcie zadania druku.
-                    await printLabel(finalTitle, cleanCode);
+                    printTiming = await printLabel(finalTitle, cleanCode);
                 } catch (error) {
                     playErrorSound();
                     const color = getDynamicColor("error");
                     resultEl.style.color = "";
-                    resultEl.innerHTML = `<div style="color: ${color};">❌ ${error.message}</div>`;
+                    resultEl.innerHTML = `
+                        <div style="color: ${color};">❌ ${error.message}</div>
+                        ${printTimingHtml(error.printTiming)}
+                    `;
                     addScanToHistory(trackingInput, cleanCode, `Błąd wydruku: ${error.message}`, "error");
                     setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "tak"), 10);
                     setTimeout(() => input.focus(), 100);
@@ -940,6 +1054,7 @@
                 resultEl.innerHTML = `
                     <div style="color: #10b981; font-size: 18px; margin-bottom: 12px;">✅ Wydrukowano: ${cleanCode}</div>
                     <div style="color: var(--text-main); font-size: 22px; line-height: 1.4; padding: 0 10px;">${finalTitle}</div>
+                    ${printTimingHtml(printTiming)}
                     ${imgHtml}
                 `;
 
