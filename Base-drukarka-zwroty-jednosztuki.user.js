@@ -1,15 +1,18 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      2.4
+// @version      3.0.0
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_registerMenuCommand
 // @connect      script.google.com
 // @connect      script.googleusercontent.com
 // @connect      localhost
 // @connect      127.0.0.1
+// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/Base-drukarka-zwroty-jednosztuki.user.js
+// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/Base-drukarka-zwroty-jednosztuki.user.js
 // ==/UserScript==
 
 (function () {
@@ -23,6 +26,13 @@
     // Link do arkusza produktów (do mapowania SKU na kod kreskowy)
     const PRODUCTS_API_URL = "https://script.google.com/macros/s/AKfycbzQEqxAKjhMQS35zaUQHZ0aE6g9SAsiZyzPxUVnVmAb_U9tpGhjsP3vHZkBoapFhxEJ/exec";
 
+    // Integracja ze zmianą statusu zwrotu w Base.
+    // BL_TOKEN pozostaje wyłącznie we właściwościach Google Apps Script.
+    const WEBHOOK_SECRET_KEY = "stocksell_returns_webhook_secret_v1";
+    const STATUS_QUEUE_KEY = "stocksell_returns_status_queue_v2";
+    const STATUS_REQUEST_TIMEOUT = 45000;
+    const STATUS_RETRY_INTERVAL = 30000;
+
     let printerReady = false;
     let zebraDeviceObj = null;
 
@@ -33,9 +43,10 @@
     let productsStatusEl = null;
     let printerStatusEl = null;
     let scanCounterEl = null;
+    let baseStatusEl = null;
     let refreshBtn = null;
     let historyContainer = null;
-    
+
     // Zmienne do ponownego wydruku
     let lastPrintedCode = null;
     let lastPrintedTitle = null;
@@ -43,6 +54,7 @@
 
     let recentScans = JSON.parse(GM_getValue("returns_recent_scans_v1", "[]"));
     let currentTheme = GM_getValue("stocksell_theme", "dark");
+    let statusSyncInProgress = false;
 
     //////////////////////////////////////////////////////
     // DŹWIĘK BŁĘDU (Generowany z przeglądarki)
@@ -50,11 +62,11 @@
     function playErrorSound() {
         try {
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
-            
+
             function playBeep(freq, startTime, duration) {
                 const osc = ctx.createOscillator();
                 const gain = ctx.createGain();
-                osc.type = 'square'; 
+                osc.type = 'square';
                 osc.frequency.setValueAtTime(freq, startTime);
                 gain.gain.setValueAtTime(0.1, startTime);
                 gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
@@ -65,8 +77,8 @@
             }
 
             const now = ctx.currentTime;
-            playBeep(300, now, 0.15);      
-            playBeep(200, now + 0.15, 0.2); 
+            playBeep(300, now, 0.15);
+            playBeep(200, now + 0.15, 0.2);
         } catch (e) {
             console.error("Web Audio API nie jest wspierane", e);
         }
@@ -107,7 +119,7 @@
                 color: var(--text-main); background: var(--input-bg);
             }
             .stocksell-input:focus { border-color: #3b82f6; }
-            
+
             /* Stylowanie paska przewijania dla historii */
             .stocksell-scroll::-webkit-scrollbar { width: 8px; }
             .stocksell-scroll::-webkit-scrollbar-track { background: transparent; }
@@ -137,6 +149,147 @@
                 status: scanStatus
             })
         });
+    }
+
+    //////////////////////////////////////////////////////
+    // ZMIANA STATUSU ZWROTU W BASE
+    //////////////////////////////////////////////////////
+    function getWebhookSecret() {
+        return String(GM_getValue(WEBHOOK_SECRET_KEY, "") || "").trim();
+    }
+
+    function configureWebhookSecret() {
+        const secret = window.prompt(
+            "Wklej wartość WEBHOOK_SECRET z właściwości Google Apps Script:"
+        );
+
+        if (secret === null) return;
+
+        const normalizedSecret = String(secret).trim();
+        if (normalizedSecret.length < 16) {
+            window.alert("WEBHOOK_SECRET jest zbyt krótki. Wklej co najmniej 16 znaków.");
+            return;
+        }
+
+        GM_setValue(WEBHOOK_SECRET_KEY, normalizedSecret);
+        if (baseStatusEl) baseStatusEl.innerText = "✅ Integracja Base gotowa";
+        flushPendingStatusUpdates(true);
+    }
+
+    function getStatusQueue() {
+        const saved = GM_getValue(STATUS_QUEUE_KEY, "[]");
+        try {
+            const queue = typeof saved === "string" ? JSON.parse(saved) : saved;
+            return Array.isArray(queue) ? queue : [];
+        } catch (error) {
+            console.error("[RETURNS API] Uszkodzona kolejka statusów:", error);
+            return [];
+        }
+    }
+
+    function saveStatusQueue(queue) {
+        GM_setValue(STATUS_QUEUE_KEY, JSON.stringify(queue));
+    }
+
+    function enqueueStatusUpdate(retData, tracking, cleanCode) {
+        const returnId = String(retData && (retData.return_id || retData.return_nr) || "").trim();
+        if (!/^\d+$/.test(returnId)) {
+            console.error("[RETURNS API] Brak prawidłowego numeru zwrotu:", retData);
+            return false;
+        }
+
+        const queue = getStatusQueue().filter(item => String(item.return_id) !== returnId);
+        queue.push({
+            return_id: returnId,
+            tracking: String(tracking || "").trim(),
+            print_code: String(cleanCode || "").trim(),
+            created_at: new Date().toISOString()
+        });
+        saveStatusQueue(queue);
+        return true;
+    }
+
+    function sendStatusUpdate(item, secret) {
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: "POST",
+                url: RETURNS_API_URL,
+                anonymous: true,
+                timeout: STATUS_REQUEST_TIMEOUT,
+                headers: { "Content-Type": "application/json" },
+                data: JSON.stringify({
+                    action: "label_printed",
+                    secret: secret,
+                    return_id: Number(item.return_id),
+                    tracking: item.tracking,
+                    print_code: item.print_code,
+                    timestamp: new Date().toISOString()
+                }),
+                onload: response => {
+                    if (response.status < 200 || response.status >= 300) {
+                        reject(new Error(`HTTP ${response.status}`));
+                        return;
+                    }
+
+                    try {
+                        const result = JSON.parse(response.responseText);
+                        if (!result || result.status !== "success") {
+                            reject(new Error(result && result.message
+                                ? result.message
+                                : "Backend nie potwierdził zmiany statusu"));
+                            return;
+                        }
+                        resolve(result);
+                    } catch (error) {
+                        reject(new Error("Nieprawidłowa odpowiedź Google Apps Script"));
+                    }
+                },
+                onerror: () => reject(new Error("Błąd połączenia z Google Apps Script")),
+                ontimeout: () => reject(new Error("Przekroczono czas zmiany statusu w Base"))
+            });
+        });
+    }
+
+    async function flushPendingStatusUpdates(showStatus = false) {
+        if (statusSyncInProgress) return;
+
+        let queue = getStatusQueue();
+        if (!queue.length) {
+            if (showStatus && baseStatusEl) baseStatusEl.innerText = "✅ Brak oczekujących zmian statusu";
+            return;
+        }
+
+        const secret = getWebhookSecret();
+        if (!secret) {
+            if (baseStatusEl) baseStatusEl.innerText = "⚠️ Ustaw WEBHOOK_SECRET w menu Tampermonkey";
+            return;
+        }
+
+        statusSyncInProgress = true;
+        if (showStatus && baseStatusEl) baseStatusEl.innerText = "🔄 Aktualizowanie statusu w Base...";
+
+        try {
+            for (const item of [...queue]) {
+                try {
+                    const result = await sendStatusUpdate(item, secret);
+                    queue = queue.filter(queued => String(queued.return_id) !== String(item.return_id));
+                    saveStatusQueue(queue);
+                    console.info(
+                        `[RETURNS API] Zwrot ${result.return_id} przeniesiony do statusu ${result.status_id}`
+                    );
+                    if (baseStatusEl) {
+                        baseStatusEl.innerText = `✅ Zwrot ${result.return_id} przeniesiony w Base`;
+                    }
+                } catch (error) {
+                    console.error(`[RETURNS API] Zwrot ${item.return_id}:`, error);
+                    if (baseStatusEl) {
+                        baseStatusEl.innerText = `⚠️ Status zwrotu ${item.return_id} oczekuje na ponowienie`;
+                    }
+                }
+            }
+        } finally {
+            statusSyncInProgress = false;
+        }
     }
 
     //////////////////////////////////////////////////////
@@ -190,7 +343,7 @@
     function addScanToHistory(tracking, printCode, title, status) {
         recentScans.unshift({ tracking, printCode, title, status });
         // Twarde wymuszenie obcięcia bazy do 50 elementów (zabezpieczenie przed memory leakiem)
-        recentScans = recentScans.slice(0, 50); 
+        recentScans = recentScans.slice(0, 50);
         GM_setValue("returns_recent_scans_v1", JSON.stringify(recentScans));
         updateRecentScansUI();
     }
@@ -322,20 +475,60 @@
     }
 
     function printLabel(title, code) {
-        if (!printerReady) return;
-        const zpl = createZPL(title, code);
-        GM_xmlhttpRequest({
-            method: "POST", url: "http://localhost:9100/write",
-            headers: { "Content-Type": "application/json" },
-            data: JSON.stringify({ device: zebraDeviceObj, data: zpl })
+        return new Promise((resolve, reject) => {
+            if (!printerReady || !zebraDeviceObj) {
+                reject(new Error("Brak połączenia z drukarką Zebra"));
+                return;
+            }
+
+            let zpl;
+            try {
+                zpl = createZPL(title, code);
+            } catch (error) {
+                reject(error);
+                return;
+            }
+
+            GM_xmlhttpRequest({
+                method: "POST",
+                url: "http://localhost:9100/write",
+                timeout: 7000,
+                headers: { "Content-Type": "application/json" },
+                data: JSON.stringify({ device: zebraDeviceObj, data: zpl }),
+                onload: response => {
+                    if (response.status >= 200 && response.status < 300) {
+                        resolve(response);
+                    } else {
+                        reject(new Error(`Drukarka zwróciła HTTP ${response.status}`));
+                    }
+                },
+                onerror: () => {
+                    printerReady = false;
+                    reject(new Error("Błąd połączenia z drukarką"));
+                    setTimeout(initPrinter, 1000);
+                },
+                ontimeout: () => {
+                    printerReady = false;
+                    reject(new Error("Przekroczono czas oczekiwania na drukarkę"));
+                    setTimeout(initPrinter, 1000);
+                }
+            });
         });
     }
 
     function createZPL(title, code) {
-        const safeTitle = title.replace(/\^/g, "").substring(0, 80);
+        const safeTitle = String(title || "")
+            .replace(/[\^~\r\n]/g, " ")
+            .replace(/\s+/g, " ")
+            .substring(0, 80);
+        const safeCode = String(code || "")
+            .replace(/[\^~\r\n]/g, "")
+            .trim();
+        if (!safeCode) throw new Error("Brak kodu do wydrukowania");
         const bytes = new TextEncoder().encode(safeTitle);
         const titleHex = Array.from(bytes).map(b => "_" + b.toString(16).padStart(2, "0").toUpperCase()).join("");
-        const fCode = String(code).match(/.{1,3}/g).join(" ");
+        const fCodeParts = safeCode.match(/.{1,3}/g);
+        const fCode = fCodeParts ? fCodeParts.join(" ") : safeCode;
         return `
 ^XA
 ^CI28
@@ -347,9 +540,9 @@
 ^FB416,2,0,C,0
 ^FH^FD${titleHex}^FS
 ^FO20,130
-^BY3.0,2,100
+^BY3,2,100
 ^BCN,85,N,N,N
-^FD${code}^FS
+^FD${safeCode}^FS
 ^FO55,225
 ^A0N,72,72
 ^FD${fCode}^FS
@@ -407,7 +600,13 @@
         productsStatusEl.style.cssText = `font-size: 15px; color: var(--text-muted); margin-bottom: 8px;`;
 
         printerStatusEl = document.createElement("div");
-        printerStatusEl.style.cssText = `font-size: 15px; color: var(--text-muted); margin-bottom: 12px;`;
+        printerStatusEl.style.cssText = `font-size: 15px; color: var(--text-muted); margin-bottom: 4px;`;
+
+        baseStatusEl = document.createElement("div");
+        baseStatusEl.style.cssText = `font-size: 15px; color: var(--text-muted); margin-bottom: 12px;`;
+        baseStatusEl.innerText = getWebhookSecret()
+            ? "✅ Integracja Base gotowa"
+            : "⚠️ Ustaw WEBHOOK_SECRET w menu Tampermonkey";
 
         scanCounterEl = document.createElement("div");
         scanCounterEl.style.cssText = `font-size: 15px; color: var(--text-sub); margin-bottom: 25px; padding-bottom: 15px; border-bottom: 1px dashed var(--border-color);`;
@@ -419,20 +618,20 @@
         const reprintBtn = document.createElement("button");
         reprintBtn.innerHTML = "🖨️ Wydrukuj ostatni kod";
         reprintBtn.style.cssText = `
-            margin-top: 15px; width: 100%; padding: 14px; font-size: 16px; 
-            background-color: #3b82f6; color: #ffffff; border: none; 
-            border-radius: 8px; cursor: pointer; font-weight: bold; 
+            margin-top: 15px; width: 100%; padding: 14px; font-size: 16px;
+            background-color: #3b82f6; color: #ffffff; border: none;
+            border-radius: 8px; cursor: pointer; font-weight: bold;
             transition: all 0.2s; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         `;
         reprintBtn.onmouseover = () => reprintBtn.style.backgroundColor = "#2563eb";
         reprintBtn.onmouseout = () => reprintBtn.style.backgroundColor = "#3b82f6";
-        
+
         const resultEl = document.createElement("div");
         resultEl.style.cssText = `margin-top: 25px; font-size: 18px; font-weight: bold; min-height: 30px; text-align: center;`;
 
-        leftCol.append(title, returnsStatusEl, productsStatusEl, printerStatusEl, scanCounterEl, input, reprintBtn, resultEl);
+        leftCol.append(title, returnsStatusEl, productsStatusEl, printerStatusEl, baseStatusEl, scanCounterEl, input, reprintBtn, resultEl);
 
-        // PRAWA KOLUMNA 
+        // PRAWA KOLUMNA
         const rightCol = document.createElement("div");
         rightCol.style.cssText = `flex: 1; border-left: 1px solid var(--border-color); padding-left: 40px; display: flex; flex-direction: column; height: 100%;`;
 
@@ -489,7 +688,7 @@
                 if (lastAlertType === "rejected") {
                     lastAlertColor = (lastAlertColor === "#f59e0b") ? "#ef4444" : "#f59e0b";
                 } else {
-                    lastAlertColor = "#f59e0b"; 
+                    lastAlertColor = "#f59e0b";
                 }
                 lastAlertType = "rejected";
                 return lastAlertColor;
@@ -497,13 +696,13 @@
                 if (lastAlertType === "error") {
                     lastAlertColor = (lastAlertColor === "#ef4444") ? "#f59e0b" : "#ef4444";
                 } else {
-                    lastAlertColor = "#ef4444"; 
+                    lastAlertColor = "#ef4444";
                 }
                 lastAlertType = "error";
                 return lastAlertColor;
             }
         }
-        
+
         function resetDynamicColor() {
             lastAlertType = null;
             lastAlertColor = null;
@@ -519,7 +718,7 @@
         };
 
         // Ponowny wydruk
-        reprintBtn.onclick = () => {
+        reprintBtn.onclick = async () => {
             if (lastPrintedCode && lastPrintedTitle) {
                 if (!printerReady) {
                     playErrorSound();
@@ -528,10 +727,21 @@
                     resultEl.innerHTML = `<div style="color: ${color};">❌ Brak połączenia z drukarką!</div>`;
                     return;
                 }
-                
+
                 resetDynamicColor();
-                printLabel(lastPrintedTitle, lastPrintedCode);
-                
+                resultEl.style.color = "";
+                resultEl.innerHTML = `<div style="color: #3b82f6;">🖨️ Ponowne drukowanie ${lastPrintedCode}...</div>`;
+
+                try {
+                    await printLabel(lastPrintedTitle, lastPrintedCode);
+                } catch (error) {
+                    playErrorSound();
+                    const color = getDynamicColor("error");
+                    resultEl.innerHTML = `<div style="color: ${color};">❌ ${error.message}</div>`;
+                    setTimeout(() => input.focus(), 100);
+                    return;
+                }
+
                 let imgHtml = "";
                 if (lastPrintedImage) {
                     imgHtml = `<div style="margin-top: 20px; text-align: center;">
@@ -554,7 +764,7 @@
             setTimeout(() => input.focus(), 100);
         };
 
-        input.addEventListener("keydown", function(e) {
+        input.addEventListener("keydown", async function(e) {
             if (e.key === "Enter") {
                 const trackingInput = input.value.trim().toLowerCase();
                 input.value = "";
@@ -628,7 +838,7 @@
                 }
 
                 resetDynamicColor();
-                
+
                 let imgHtml = "";
                 if (finalImage) {
                     imgHtml = `<div style="margin-top: 20px; text-align: center;">
@@ -643,15 +853,41 @@
                     ${imgHtml}
                 `;
 
-                // Zapamiętanie ostatniego kodu i zdjęcia do ponownego wydruku
+                try {
+                    // Dopiero HTTP 2xx z lokalnej usługi Zebra oznacza przyjęcie zadania druku.
+                    await printLabel(finalTitle, cleanCode);
+                } catch (error) {
+                    playErrorSound();
+                    const color = getDynamicColor("error");
+                    resultEl.style.color = "";
+                    resultEl.innerHTML = `<div style="color: ${color};">❌ ${error.message}</div>`;
+                    addScanToHistory(trackingInput, cleanCode, `Błąd wydruku: ${error.message}`, "error");
+                    setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "tak"), 10);
+                    setTimeout(() => input.focus(), 100);
+                    return;
+                }
+
+                // Zapamiętanie do ponownego wydruku dopiero po przyjęciu zadania przez drukarkę.
                 lastPrintedCode = cleanCode;
                 lastPrintedTitle = finalTitle;
                 lastPrintedImage = finalImage;
 
-                printLabel(finalTitle, cleanCode);
+                resultEl.style.color = "";
+                resultEl.innerHTML = `
+                    <div style="color: #10b981; font-size: 18px; margin-bottom: 12px;">✅ Wydrukowano: ${cleanCode}</div>
+                    <div style="color: var(--text-main); font-size: 22px; line-height: 1.4; padding: 0 10px;">${finalTitle}</div>
+                    ${imgHtml}
+                `;
+
                 addScanToHistory(trackingInput, cleanCode, finalTitle, "success");
-                
                 setTimeout(() => sendLogToSheet(retData.return_nr, trackingInput, "tak"), 10);
+
+                // Zmiana statusu jest niezależną kolejką. Jej błąd nie drukuje etykiety ponownie.
+                if (enqueueStatusUpdate(retData, trackingInput, cleanCode)) {
+                    flushPendingStatusUpdates(true);
+                } else if (baseStatusEl) {
+                    baseStatusEl.innerText = "❌ Nie ustalono numeru zwrotu do aktualizacji Base";
+                }
             }
         });
 
@@ -676,7 +912,13 @@
         }
     }
 
+    GM_registerMenuCommand("Ustaw WEBHOOK_SECRET dla Base", configureWebhookSecret);
+    GM_registerMenuCommand("Ponów oczekujące zmiany statusów", () => {
+        flushPendingStatusUpdates(true);
+    });
+
     setInterval(checkUrlVisibility, 500);
+    setInterval(() => flushPendingStatusUpdates(false), STATUS_RETRY_INTERVAL);
 
     setTimeout(() => {
         if (window.location.href.includes("panel.baselinker.com")) {
@@ -684,6 +926,7 @@
             preloadReturns(false);
             preloadProducts(false);
             initPrinter();
+            flushPendingStatusUpdates(false);
         }
     }, 500);
 
