@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      3.0.0
+// @version      3.1.1
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -32,6 +32,7 @@
     const STATUS_QUEUE_KEY = "stocksell_returns_status_queue_v2";
     const STATUS_REQUEST_TIMEOUT = 45000;
     const STATUS_RETRY_INTERVAL = 30000;
+    const RETURNS_AUTO_REFRESH_INTERVAL = 5 * 60 * 1000;
 
     let printerReady = false;
     let zebraDeviceObj = null;
@@ -46,7 +47,7 @@
     let baseStatusEl = null;
     let refreshBtn = null;
     let historyContainer = null;
-
+    
     // Zmienne do ponownego wydruku
     let lastPrintedCode = null;
     let lastPrintedTitle = null;
@@ -55,6 +56,7 @@
     let recentScans = JSON.parse(GM_getValue("returns_recent_scans_v1", "[]"));
     let currentTheme = GM_getValue("stocksell_theme", "dark");
     let statusSyncInProgress = false;
+    let returnsLoading = false;
 
     //////////////////////////////////////////////////////
     // DŹWIĘK BŁĘDU (Generowany z przeglądarki)
@@ -62,11 +64,11 @@
     function playErrorSound() {
         try {
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
-
+            
             function playBeep(freq, startTime, duration) {
                 const osc = ctx.createOscillator();
                 const gain = ctx.createGain();
-                osc.type = 'square';
+                osc.type = 'square'; 
                 osc.frequency.setValueAtTime(freq, startTime);
                 gain.gain.setValueAtTime(0.1, startTime);
                 gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
@@ -77,8 +79,8 @@
             }
 
             const now = ctx.currentTime;
-            playBeep(300, now, 0.15);
-            playBeep(200, now + 0.15, 0.2);
+            playBeep(300, now, 0.15);      
+            playBeep(200, now + 0.15, 0.2); 
         } catch (e) {
             console.error("Web Audio API nie jest wspierane", e);
         }
@@ -119,7 +121,7 @@
                 color: var(--text-main); background: var(--input-bg);
             }
             .stocksell-input:focus { border-color: #3b82f6; }
-
+            
             /* Stylowanie paska przewijania dla historii */
             .stocksell-scroll::-webkit-scrollbar { width: 8px; }
             .stocksell-scroll::-webkit-scrollbar-track { background: transparent; }
@@ -189,6 +191,15 @@
 
     function saveStatusQueue(queue) {
         GM_setValue(STATUS_QUEUE_KEY, JSON.stringify(queue));
+    }
+
+    function removeStatusUpdateFromLatestQueue(returnId) {
+        // Zawsze czytamy najnowszą kolejkę z pamięci. Podczas oczekiwania na
+        // odpowiedź API operator mógł już zeskanować kolejną paczkę.
+        const latestQueue = getStatusQueue().filter(
+            item => String(item.return_id) !== String(returnId)
+        );
+        saveStatusQueue(latestQueue);
     }
 
     function enqueueStatusUpdate(retData, tracking, cleanCode) {
@@ -273,7 +284,13 @@
                 try {
                     const result = await sendStatusUpdate(item, secret);
                     queue = queue.filter(queued => String(queued.return_id) !== String(item.return_id));
-                    saveStatusQueue(queue);
+                    removeStatusUpdateFromLatestQueue(item.return_id);
+
+                    // Usuń zwrot z bieżącej pamięci skanera i unieważnij cache.
+                    // Kolejne odświeżenie pobierze już snapshot bez tego statusu.
+                    returnsCache.delete(String(item.tracking || "").trim().toLowerCase());
+                    GM_setValue("stocksell_returns_time", "0");
+
                     console.info(
                         `[RETURNS API] Zwrot ${result.return_id} przeniesiony do statusu ${result.status_id}`
                     );
@@ -290,6 +307,37 @@
         } finally {
             statusSyncInProgress = false;
         }
+    }
+
+    function retryStatusUpdateByReturnId() {
+        const enteredValue = window.prompt(
+            "Podaj numer zwrotu, który ma zostać przeniesiony w Base bez ponownego drukowania etykiety:"
+        );
+
+        if (enteredValue === null) return;
+
+        const returnId = String(enteredValue).trim();
+        if (!/^\d+$/.test(returnId)) {
+            window.alert("Nieprawidłowy numer zwrotu. Wpisz wyłącznie cyfry.");
+            return;
+        }
+
+        const queue = getStatusQueue().filter(
+            item => String(item.return_id) !== returnId
+        );
+        queue.push({
+            return_id: returnId,
+            tracking: "",
+            print_code: "",
+            created_at: new Date().toISOString(),
+            manual_retry: true
+        });
+        saveStatusQueue(queue);
+
+        if (baseStatusEl) {
+            baseStatusEl.innerText = `🔄 Ponawianie statusu zwrotu ${returnId}...`;
+        }
+        flushPendingStatusUpdates(true);
     }
 
     //////////////////////////////////////////////////////
@@ -343,7 +391,7 @@
     function addScanToHistory(tracking, printCode, title, status) {
         recentScans.unshift({ tracking, printCode, title, status });
         // Twarde wymuszenie obcięcia bazy do 50 elementów (zabezpieczenie przed memory leakiem)
-        recentScans = recentScans.slice(0, 50);
+        recentScans = recentScans.slice(0, 50); 
         GM_setValue("returns_recent_scans_v1", JSON.stringify(recentScans));
         updateRecentScansUI();
     }
@@ -353,6 +401,7 @@
     //////////////////////////////////////////////////////
     function preloadReturns(forceRefresh = false) {
         if (!RETURNS_API_URL) return;
+        if (returnsLoading) return;
 
         const CACHE_KEY = "stocksell_returns_v1";
         const CACHE_TIME_KEY = "stocksell_returns_time";
@@ -367,7 +416,8 @@
                 const returns = JSON.parse(cachedData);
                 returnsCache.clear();
                 returns.forEach(ret => {
-                    returnsCache.set(ret.tracking, ret);
+                    const tracking = String(ret.tracking || "").trim().toLowerCase();
+                    if (tracking) returnsCache.set(tracking, ret);
                 });
                 if(returnsStatusEl) returnsStatusEl.innerText = `✅ Baza zwrotów gotowa (${returnsCache.size} poz.)`;
                 if (refreshBtn) refreshBtn.disabled = false;
@@ -377,17 +427,20 @@
 
         if(returnsStatusEl) returnsStatusEl.innerText = "⏳ Pobieranie bazy zwrotów...";
         if (refreshBtn) refreshBtn.disabled = true;
+        returnsLoading = true;
 
         GM_xmlhttpRequest({
             method: "GET",
             url: RETURNS_API_URL,
             anonymous: true, // Zabezpieczenie przed błędem ciasteczek Google
+            timeout: 45000,
             onload: function (res) {
                 try {
                     const returns = JSON.parse(res.responseText);
                     returnsCache.clear();
                     returns.forEach(ret => {
-                        returnsCache.set(ret.tracking, ret);
+                        const tracking = String(ret.tracking || "").trim().toLowerCase();
+                        if (tracking) returnsCache.set(tracking, ret);
                     });
                     GM_setValue(CACHE_KEY, JSON.stringify(returns));
                     GM_setValue(CACHE_TIME_KEY, String(Date.now()));
@@ -395,8 +448,19 @@
                 } catch (e) {
                     if(returnsStatusEl) returnsStatusEl.innerText = "❌ Błąd pobierania zwrotów";
                 } finally {
+                    returnsLoading = false;
                     if (refreshBtn) refreshBtn.disabled = false;
                 }
+            },
+            onerror: function () {
+                returnsLoading = false;
+                if(returnsStatusEl) returnsStatusEl.innerText = "❌ Błąd połączenia z bazą zwrotów";
+                if (refreshBtn) refreshBtn.disabled = false;
+            },
+            ontimeout: function () {
+                returnsLoading = false;
+                if(returnsStatusEl) returnsStatusEl.innerText = "❌ Timeout bazy zwrotów";
+                if (refreshBtn) refreshBtn.disabled = false;
             }
         });
     }
@@ -618,20 +682,20 @@
         const reprintBtn = document.createElement("button");
         reprintBtn.innerHTML = "🖨️ Wydrukuj ostatni kod";
         reprintBtn.style.cssText = `
-            margin-top: 15px; width: 100%; padding: 14px; font-size: 16px;
-            background-color: #3b82f6; color: #ffffff; border: none;
-            border-radius: 8px; cursor: pointer; font-weight: bold;
+            margin-top: 15px; width: 100%; padding: 14px; font-size: 16px; 
+            background-color: #3b82f6; color: #ffffff; border: none; 
+            border-radius: 8px; cursor: pointer; font-weight: bold; 
             transition: all 0.2s; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         `;
         reprintBtn.onmouseover = () => reprintBtn.style.backgroundColor = "#2563eb";
         reprintBtn.onmouseout = () => reprintBtn.style.backgroundColor = "#3b82f6";
-
+        
         const resultEl = document.createElement("div");
         resultEl.style.cssText = `margin-top: 25px; font-size: 18px; font-weight: bold; min-height: 30px; text-align: center;`;
 
         leftCol.append(title, returnsStatusEl, productsStatusEl, printerStatusEl, baseStatusEl, scanCounterEl, input, reprintBtn, resultEl);
 
-        // PRAWA KOLUMNA
+        // PRAWA KOLUMNA 
         const rightCol = document.createElement("div");
         rightCol.style.cssText = `flex: 1; border-left: 1px solid var(--border-color); padding-left: 40px; display: flex; flex-direction: column; height: 100%;`;
 
@@ -688,7 +752,7 @@
                 if (lastAlertType === "rejected") {
                     lastAlertColor = (lastAlertColor === "#f59e0b") ? "#ef4444" : "#f59e0b";
                 } else {
-                    lastAlertColor = "#f59e0b";
+                    lastAlertColor = "#f59e0b"; 
                 }
                 lastAlertType = "rejected";
                 return lastAlertColor;
@@ -696,13 +760,13 @@
                 if (lastAlertType === "error") {
                     lastAlertColor = (lastAlertColor === "#ef4444") ? "#f59e0b" : "#ef4444";
                 } else {
-                    lastAlertColor = "#ef4444";
+                    lastAlertColor = "#ef4444"; 
                 }
                 lastAlertType = "error";
                 return lastAlertColor;
             }
         }
-
+        
         function resetDynamicColor() {
             lastAlertType = null;
             lastAlertColor = null;
@@ -727,7 +791,7 @@
                     resultEl.innerHTML = `<div style="color: ${color};">❌ Brak połączenia z drukarką!</div>`;
                     return;
                 }
-
+                
                 resetDynamicColor();
                 resultEl.style.color = "";
                 resultEl.innerHTML = `<div style="color: #3b82f6;">🖨️ Ponowne drukowanie ${lastPrintedCode}...</div>`;
@@ -741,7 +805,7 @@
                     setTimeout(() => input.focus(), 100);
                     return;
                 }
-
+                
                 let imgHtml = "";
                 if (lastPrintedImage) {
                     imgHtml = `<div style="margin-top: 20px; text-align: center;">
@@ -838,7 +902,7 @@
                 }
 
                 resetDynamicColor();
-
+                
                 let imgHtml = "";
                 if (finalImage) {
                     imgHtml = `<div style="margin-top: 20px; text-align: center;">
@@ -916,9 +980,14 @@
     GM_registerMenuCommand("Ponów oczekujące zmiany statusów", () => {
         flushPendingStatusUpdates(true);
     });
+    GM_registerMenuCommand(
+        "Przenieś zwrot po numerze — bez ponownego druku",
+        retryStatusUpdateByReturnId
+    );
 
     setInterval(checkUrlVisibility, 500);
     setInterval(() => flushPendingStatusUpdates(false), STATUS_RETRY_INTERVAL);
+    setInterval(() => preloadReturns(true), RETURNS_AUTO_REFRESH_INTERVAL);
 
     setTimeout(() => {
         if (window.location.href.includes("panel.baselinker.com")) {
