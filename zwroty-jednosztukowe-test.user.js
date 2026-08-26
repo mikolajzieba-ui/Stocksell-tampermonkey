@@ -11,8 +11,8 @@
 // @connect      script.googleusercontent.com
 // @connect      localhost
 // @connect      127.0.0.1
-// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/Base-drukarka-zwroty-jednosztuki.user.js
-// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/Base-drukarka-zwroty-jednosztuki.user.js
+// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/zwroty-jednosztukowe-test.user.js
+// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/zwroty-jednosztukowe-test.user.js
 // ==/UserScript==
 
 (function () {
