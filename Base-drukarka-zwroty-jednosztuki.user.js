@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      4.3.0
+// @version      4.3.1
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -289,48 +289,42 @@
                 min-height: 25px;
                 flex-shrink: 0;
             }
-            .stocksell-verification-overlay {
-                display: none; position: absolute; inset: 14px 20px;
-                z-index: 20; padding: 18px; border: 2px solid #f59e0b;
-                border-radius: 12px; background: var(--bg-panel);
-                box-shadow: 0 12px 45px rgba(0,0,0,.65);
-                flex-direction: column; gap: 12px; min-height: 0;
+            .stocksell-card-verification {
+                display: none; flex-direction: column; gap: 7px;
+                padding: 9px; border: 2px solid var(--border-color);
+                border-radius: 8px; background: var(--input-bg);
             }
-            .stocksell-verification-list {
-                display: flex; flex-direction: column; gap: 9px;
-                min-height: 0; overflow-y: auto; padding-right: 6px;
+            .stocksell-multi-grid.is-verification-mode .stocksell-card-verification {
+                display: flex;
             }
-            .stocksell-verification-row {
-                display: grid; grid-template-columns: 30px 86px minmax(190px, 27%) minmax(0, 1fr);
-                gap: 10px; align-items: center; padding: 10px;
-                border: 1px solid var(--border-color); border-radius: 8px;
-                background: var(--input-bg);
+            .stocksell-card-verification.is-selected {
+                border-color: #f59e0b;
+                background: color-mix(in srgb, #f59e0b 10%, var(--input-bg));
             }
-            .stocksell-verification-row.is-selected { border-color: #f59e0b; }
-            .stocksell-verification-row input[type="checkbox"] {
-                width: 21px; height: 21px; accent-color: #f59e0b; cursor: pointer;
+            .stocksell-verification-selector {
+                display: flex; align-items: center; gap: 8px;
+                color: #f59e0b; font-size: 14px; font-weight: 900;
+                cursor: pointer;
             }
-            .stocksell-verification-image {
-                width: 86px; height: 86px; overflow: hidden;
-                display: flex; align-items: center; justify-content: center;
-                border: 1px solid var(--border-color); border-radius: 7px;
-                background: #fff; color: #6b7280;
-                font-size: 10px; font-weight: 800; text-align: center;
-            }
-            .stocksell-verification-image img {
-                display: block; width: 100%; height: 100%; object-fit: contain;
+            .stocksell-verification-selector input[type="checkbox"] {
+                width: 21px; height: 21px; margin: 0;
+                accent-color: #f59e0b; cursor: pointer; flex-shrink: 0;
             }
             .stocksell-verification-description {
-                width: 100%; min-height: 48px; max-height: 100px; resize: vertical;
-                padding: 9px 11px; border: 2px solid var(--input-border);
+                box-sizing: border-box; width: 100%; min-height: 58px;
+                max-height: 120px; resize: vertical; padding: 8px 9px;
+                border: 2px solid var(--input-border);
                 border-radius: 7px; background: var(--bg-panel); color: var(--text-main);
-                font-size: 15px; line-height: 1.25;
+                font-size: 13px; line-height: 1.25;
             }
             .stocksell-verification-description:focus { border-color: #f59e0b; outline: none; }
             .stocksell-verification-description:disabled { opacity: 0.45; cursor: not-allowed; }
+            .stocksell-inline-verification-footer {
+                display: none; flex-direction: column; gap: 6px; flex-shrink: 0;
+                padding-top: 8px; border-top: 1px solid var(--border-color);
+            }
             .stocksell-verification-actions {
                 display: flex; gap: 12px; flex-shrink: 0;
-                padding-top: 10px; border-top: 1px solid var(--border-color);
             }
             .stocksell-action-btn:disabled,
             .stocksell-mode-btn:disabled {
@@ -347,10 +341,6 @@
             }
             @media (max-width: 1000px) {
                 .stocksell-multi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-                .stocksell-verification-row {
-                    grid-template-columns: 30px 70px minmax(150px, 30%) minmax(0, 1fr);
-                }
-                .stocksell-verification-image { width: 70px; height: 70px; }
             }
             @media (max-height: 850px) {
                 .stocksell-multi-grid[data-layout="large"] .stocksell-multi-image {
@@ -1838,20 +1828,8 @@
         multiActions.append(retryPrintBtn, acceptBtn, verifyBtn);
         multiWorkspace.append(multiHeader, multiGridScroll, multiActions);
 
-        const verificationOverlay = document.createElement("div");
-        verificationOverlay.className = "stocksell-verification-overlay";
-
-        const verificationTitle = document.createElement("div");
-        verificationTitle.innerHTML = "<strong>🔎 Wybierz produkty do weryfikacji</strong>";
-        verificationTitle.style.cssText = "font-size:22px;color:#f59e0b;flex-shrink:0;";
-
-        const verificationHint = document.createElement("div");
-        verificationHint.textContent =
-            "Zaznacz każdy problematyczny produkt i wpisz osobny opis. Kod i opis zostaną zapisane w kolumnie E logów.";
-        verificationHint.style.cssText = "font-size:14px;color:var(--text-muted);flex-shrink:0;";
-
-        const verificationList = document.createElement("div");
-        verificationList.className = "stocksell-scroll stocksell-verification-list";
+        const inlineVerificationFooter = document.createElement("div");
+        inlineVerificationFooter.className = "stocksell-inline-verification-footer";
 
         const verificationMessage = document.createElement("div");
         verificationMessage.style.cssText =
@@ -1871,13 +1849,8 @@
             "flex:2;padding:12px;background:#d97706;color:#fff;border:none;border-radius:8px;font-size:17px;font-weight:900;cursor:pointer;";
 
         verificationActions.append(cancelVerificationBtn, saveVerificationBtn);
-        verificationOverlay.append(
-            verificationTitle,
-            verificationHint,
-            verificationList,
-            verificationMessage,
-            verificationActions
-        );
+        inlineVerificationFooter.append(verificationMessage, verificationActions);
+        multiWorkspace.appendChild(inlineVerificationFooter);
 
         leftCol.append(
             title,
@@ -1930,7 +1903,7 @@
 
         rightCol.append(rightHeader, historyContainer);
         contentRow.append(leftCol, rightCol);
-        panel.append(contentRow, verificationOverlay);
+        panel.append(contentRow);
         wrapper.append(panel, toggleBtn);
         document.body.appendChild(wrapper);
 
@@ -1976,89 +1949,52 @@
             });
         }
 
-        function closeVerificationEditor() {
-            verificationOverlay.style.display = "none";
-            verificationList.innerHTML = "";
+        function closeVerificationEditor(restoreMainActions = true) {
+            multiGrid.classList.remove("is-verification-mode");
+            inlineVerificationFooter.style.display = "none";
             verificationMessage.textContent = "";
+            verificationEditorRows.forEach(function (entry) {
+                entry.checkbox.checked = false;
+                entry.description.value = "";
+                entry.description.disabled = true;
+                entry.description.style.borderColor = "";
+                entry.row.classList.remove("is-selected");
+            });
             verificationEditorRows = [];
             saveVerificationBtn.disabled = false;
             cancelVerificationBtn.disabled = false;
+
+            if (
+                restoreMainActions &&
+                activeMultiSession &&
+                activeMultiSession.allPrinted &&
+                !decisionBusy
+            ) {
+                multiActions.style.display = "flex";
+                multiSummaryEl.textContent =
+                    "Zwrot " + activeMultiSession.returnId +
+                    " — wszystkie etykiety przekazane do drukarki";
+                multiSummaryEl.style.color = "#7c3aed";
+                multiProgressEl.textContent =
+                    activeMultiSession.items.length + " z " +
+                    activeMultiSession.items.length + " etykiet gotowych";
+            }
         }
 
         function openVerificationEditor(session) {
             if (!session || !session.allPrinted || decisionBusy) return;
 
-            closeVerificationEditor();
-            verificationTitle.textContent =
-                "🔎 Zwrot " + session.returnId + " — wybierz produkty do weryfikacji";
-
+            closeVerificationEditor(false);
             session.items.forEach(function (item) {
-                const row = document.createElement("div");
-                row.className = "stocksell-verification-row";
+                const row = item.verificationEl;
+                const checkbox = item.verificationCheckbox;
+                const description = item.verificationDescription;
+                if (!row || !checkbox || !description) return;
 
-                const checkbox = document.createElement("input");
-                checkbox.type = "checkbox";
-                checkbox.setAttribute(
-                    "aria-label",
-                    "Wybierz produkt " + item.cleanCode + " do weryfikacji"
-                );
-
-                const productInfo = document.createElement("div");
-                productInfo.style.cssText = "min-width:0;";
-
-                const imageWrap = document.createElement("div");
-                imageWrap.className = "stocksell-verification-image";
-
-                const imagePlaceholder = document.createElement("span");
-                imagePlaceholder.textContent = "Brak zdjęcia";
-
-                if (item.imageUrl) {
-                    const image = document.createElement("img");
-                    image.alt = "Zdjęcie produktu " + item.cleanCode;
-                    image.loading = "eager";
-                    image.decoding = "async";
-                    image.src = item.imageUrl;
-                    image.onerror = function () {
-                        image.remove();
-                        imageWrap.appendChild(imagePlaceholder);
-                    };
-                    imageWrap.appendChild(image);
-                } else {
-                    imageWrap.appendChild(imagePlaceholder);
-                }
-
-                const productCode = document.createElement("div");
-                productCode.textContent = "KOD: " + item.cleanCode;
-                productCode.style.cssText =
-                    "font-family:monospace;font-size:18px;font-weight:950;color:var(--code-color);overflow-wrap:anywhere;";
-
-                const productTitle = document.createElement("div");
-                productTitle.textContent = item.title;
-                productTitle.style.cssText =
-                    "margin-top:3px;font-size:13px;line-height:1.2;color:var(--text-sub);overflow-wrap:anywhere;";
-
-                productInfo.append(productCode, productTitle);
-
-                const description = document.createElement("textarea");
-                description.className = "stocksell-verification-description";
-                description.placeholder = "Opisz, co jest nie tak z tym produktem...";
-                description.maxLength = 250;
+                checkbox.checked = false;
+                description.value = "";
                 description.disabled = true;
-
-                checkbox.addEventListener("change", function () {
-                    description.disabled = !checkbox.checked;
-                    row.classList.toggle("is-selected", checkbox.checked);
-                    if (checkbox.checked) {
-                        verificationMessage.textContent = "";
-                        setTimeout(function () { description.focus(); }, 0);
-                    } else {
-                        description.value = "";
-                        description.style.borderColor = "";
-                    }
-                });
-
-                row.append(checkbox, imageWrap, productInfo, description);
-                verificationList.appendChild(row);
+                row.classList.remove("is-selected");
                 verificationEditorRows.push({
                     item: item,
                     row: row,
@@ -2067,7 +2003,15 @@
                 });
             });
 
-            verificationOverlay.style.display = "flex";
+            multiGrid.classList.add("is-verification-mode");
+            multiActions.style.display = "none";
+            inlineVerificationFooter.style.display = "flex";
+            multiSummaryEl.textContent =
+                "🔎 Zwrot " + session.returnId +
+                " — zaznacz problematyczne produkty i opisz problemy pod zdjęciami";
+            multiSummaryEl.style.color = "#f59e0b";
+            multiProgressEl.textContent =
+                "Kod i opis zostaną zapisane w logach oraz w Uwagach Base";
         }
 
         function collectVerificationIssues() {
@@ -2129,7 +2073,7 @@
             retryPrintBtn.style.display = "none";
             acceptBtn.disabled = true;
             verifyBtn.disabled = true;
-            closeVerificationEditor();
+            closeVerificationEditor(false);
         }
 
         function setMode(enableMulti) {
@@ -2203,7 +2147,10 @@
                     imageUrl: safeImageUrl(images[index]),
                     statusEl: null,
                     cardEl: null,
-                    reprintBtn: null
+                    reprintBtn: null,
+                    verificationEl: null,
+                    verificationCheckbox: null,
+                    verificationDescription: null
                 };
             });
         }
@@ -2287,11 +2234,69 @@
                     imageWrap.appendChild(placeholder);
                 }
 
-                card.append(cardTop, cardTitle, sku, productCodeRow, imageWrap);
+                const verificationControl = document.createElement("div");
+                verificationControl.className = "stocksell-card-verification";
+
+                const verificationSelector = document.createElement("label");
+                verificationSelector.className = "stocksell-verification-selector";
+
+                const verificationCheckbox = document.createElement("input");
+                verificationCheckbox.type = "checkbox";
+                verificationCheckbox.setAttribute(
+                    "aria-label",
+                    "Zgłoś problem z produktem " + item.cleanCode
+                );
+
+                const verificationSelectorText = document.createElement("span");
+                verificationSelectorText.textContent = "Zgłoś problem z tym produktem";
+                verificationSelector.append(
+                    verificationCheckbox,
+                    verificationSelectorText
+                );
+
+                const verificationDescription = document.createElement("textarea");
+                verificationDescription.className = "stocksell-verification-description";
+                verificationDescription.placeholder = "Opisz, co jest nie tak z tym produktem...";
+                verificationDescription.maxLength = 250;
+                verificationDescription.disabled = true;
+
+                verificationCheckbox.addEventListener("change", function () {
+                    verificationDescription.disabled = !verificationCheckbox.checked;
+                    verificationControl.classList.toggle(
+                        "is-selected",
+                        verificationCheckbox.checked
+                    );
+                    if (verificationCheckbox.checked) {
+                        verificationMessage.textContent = "";
+                        setTimeout(function () {
+                            verificationDescription.focus();
+                        }, 0);
+                    } else {
+                        verificationDescription.value = "";
+                        verificationDescription.style.borderColor = "";
+                    }
+                });
+
+                verificationControl.append(
+                    verificationSelector,
+                    verificationDescription
+                );
+
+                card.append(
+                    cardTop,
+                    cardTitle,
+                    sku,
+                    productCodeRow,
+                    imageWrap,
+                    verificationControl
+                );
                 multiGrid.appendChild(card);
                 item.statusEl = status;
                 item.cardEl = card;
                 item.reprintBtn = cardReprintBtn;
+                item.verificationEl = verificationControl;
+                item.verificationCheckbox = verificationCheckbox;
+                item.verificationDescription = verificationDescription;
             });
         }
 
@@ -2824,7 +2829,7 @@
                 multiSummaryEl.style.color = accepted ? "#10b981" : "#f59e0b";
                 multiProgressEl.textContent = "Log zmieniony na: " + result.log_status;
                 multiActions.style.display = "none";
-                closeVerificationEditor();
+                closeVerificationEditor(false);
 
                 addScanToHistory(
                     session.retData.tracking,
