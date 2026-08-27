@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      4.2.3
+// @version      4.3.0
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -1446,9 +1446,13 @@
         let zpl;
         const zplStartedMs = monotonicNow();
         try {
-            zpl = normalizedKind === "multi-return"
-                ? createMultiReturnZPL(code)
-                : createZPL(title, code);
+            if (normalizedKind === "multi-return") {
+                zpl = createMultiReturnZPL(code);
+            } else if (normalizedKind === "rejected-return") {
+                zpl = createRejectedReturnZPL(code, title);
+            } else {
+                zpl = createZPL(title, code);
+            }
         } catch (error) {
             return Promise.reject(error);
         }
@@ -1603,6 +1607,45 @@
 ^A0N,21,21
 ^FB416,1,0,C,0
 ^FDODLOZ DO WIELOSZTUK^FS
+^XZ`;
+    }
+
+    function createRejectedReturnZPL(returnId, headerText) {
+        const safeReturnId = String(returnId || "").trim();
+        if (!/^\d+$/.test(safeReturnId)) {
+            throw new Error("Numer zwrotu na etykiecie musi zawierać wyłącznie cyfry");
+        }
+
+        const safeHeader = String(headerText || "NIE PRZYJMOWAC")
+            .replace(/[\^~\r\n]/g, " ")
+            .replace(/[^A-Za-z0-9 ._-]/g, "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .substring(0, 30) || "NIE PRZYJMOWAC";
+
+        return `
+^XA
+^PW456
+^LL256
+^LH0,0
+^FO8,5
+^GB440,30,3^FS
+^FO14,10
+^A0N,20,20
+^FB428,1,0,C,0
+^FD${safeHeader}^FS
+^FO0,39
+^A0N,47,47
+^FB456,1,0,C,0
+^FD${safeReturnId}^FS
+^FO0,76
+^A0N,176,176
+^FB456,1,0,C,0
+^FDX^FS
+^FO3,76
+^A0N,176,176
+^FB456,1,0,C,0
+^FDX^FS
 ^XZ`;
     }
 
@@ -2299,6 +2342,23 @@
             pendingMultiRegistration = null;
             retryRegistrationBtn.style.display = "none";
             resetDynamicColor();
+
+            if (result.already_resolved) {
+                showResult(
+                    "Etykieta wydrukowana ponownie — zwrot " +
+                    (retData.return_id || retData.return_nr) +
+                    " był już zakończony jako: " + result.log_status,
+                    "#f59e0b"
+                );
+                addScanToHistory(
+                    retData.tracking,
+                    String(retData.return_id || retData.return_nr),
+                    "Ponowna etykieta zakończonej wielosztuki (" + result.log_status + ")",
+                    "multi"
+                );
+                return result;
+            }
+
             showResult(
                 "ODŁÓŻ DO WIELOSZTUK — zwrot " + (retData.return_id || retData.return_nr),
                 "#7c3aed"
@@ -2313,7 +2373,6 @@
         }
 
         async function handleFirstStageMulti(retData) {
-            const workflowStartedMs = monotonicNow();
             const returnId = String(retData.return_id || retData.return_nr || "").trim();
             if (!/^\d+$/.test(returnId)) {
                 throw new Error("Nieprawidłowy numer zwrotu dla wielosztuki");
@@ -2323,27 +2382,6 @@
             }
             if (!isPrinterReady("presort")) {
                 throw new Error("Brak połączenia z drukarką ZD420");
-            }
-
-            showResult("Sprawdzanie zwrotu " + returnId + "...", "#7c3aed");
-            const existingState = await sendMultiAction("multi_return_state", retData);
-            const stateReadyMs = monotonicNow();
-            console.info("[MULTI FIRST STAGE] Sprawdzono stan przed drukiem", {
-                return_id: returnId,
-                state_ms: roundTiming(stateReadyMs - workflowStartedMs)
-            });
-            if (existingState.open) {
-                showResult(
-                    "Zwrot " + returnId + " jest już oklejony — ODŁÓŻ DO WIELOSZTUK",
-                    "#7c3aed"
-                );
-                return;
-            }
-            if (existingState.log_status === "tak") {
-                throw new Error("Ten zwrot wielosztukowy został już przyjęty");
-            }
-            if (existingState.log_status === "nie") {
-                throw new Error("Ten zwrot został już przekazany do weryfikacji");
             }
 
             showResult("Przekazywanie etykiety wielosztuki " + returnId + "...", "#7c3aed");
@@ -2406,14 +2444,87 @@
 
             if (accepted !== "tak") {
                 playErrorSound();
+                const rejectedReturnId = String(
+                    retData.return_id || retData.return_nr || ""
+                ).trim();
+
+                if (!/^\d+$/.test(rejectedReturnId)) {
+                    showResult(
+                        "Odrzucono, ale brak prawidłowego numeru zwrotu do wydruku.",
+                        getDynamicColor("rejected")
+                    );
+                    addScanToHistory(
+                        trackingInput,
+                        "-",
+                        "Odrzucono – brak numeru zwrotu do etykiety",
+                        "error"
+                    );
+                    logInBackground(retData.return_nr, trackingInput, "nie");
+                    return;
+                }
+
+                if (!isPrinterReady("presort")) {
+                    showResult(
+                        "Odrzucono zwrot " + rejectedReturnId +
+                        ", ale brak połączenia z drukarką ZD420.",
+                        getDynamicColor("rejected")
+                    );
+                    addScanToHistory(
+                        trackingInput,
+                        rejectedReturnId,
+                        "Odrzucono – brak drukarki ZD420",
+                        "error"
+                    );
+                    logInBackground(retData.return_nr, trackingInput, "nie");
+                    return;
+                }
+
                 showResult(
-                    "Zwrot: " + retData.return_nr + " | Odrzucono (nie do przyjęcia)",
+                    "Odrzucono zwrot " + rejectedReturnId +
+                    " — przekazywanie etykiety z X...",
                     getDynamicColor("rejected")
+                );
+
+                let rejectedTiming;
+                try {
+                    rejectedTiming = await printLabel(
+                        "NIE PRZYJMOWAC",
+                        rejectedReturnId,
+                        "rejected-return",
+                        "presort"
+                    );
+                } catch (error) {
+                    showResult(
+                        "Odrzucono zwrot " + rejectedReturnId +
+                        ", ale nie wydrukowano etykiety: " + error.message,
+                        getDynamicColor("error"),
+                        printTimingHtml(error.printTiming)
+                    );
+                    addScanToHistory(
+                        trackingInput,
+                        rejectedReturnId,
+                        "Odrzucono – błąd etykiety X: " + error.message,
+                        "error"
+                    );
+                    logInBackground(retData.return_nr, trackingInput, "nie");
+                    return;
+                }
+
+                lastPrintedCode = rejectedReturnId;
+                lastPrintedTitle = "NIE PRZYJMOWAC";
+                lastPrintedImage = null;
+                lastPrintedKind = "rejected-return";
+                lastPrintedPrinterRole = "presort";
+
+                showResult(
+                    "Zwrot " + rejectedReturnId + " odrzucony — wydrukowano etykietę z X",
+                    getDynamicColor("rejected"),
+                    printTimingHtml(rejectedTiming)
                 );
                 addScanToHistory(
                     trackingInput,
-                    "-",
-                    "Odrzucono (Zwrot " + retData.return_nr + ")",
+                    rejectedReturnId,
+                    "Odrzucono – etykieta numeru zwrotu z X",
                     "error"
                 );
                 logInBackground(retData.return_nr, trackingInput, "nie");
@@ -2602,7 +2713,8 @@
                 returnId: String(retData.return_id || retData.return_nr),
                 items: items,
                 nextPrintIndex: 0,
-                allPrinted: false
+                allPrinted: false,
+                rejectionLabelPrinted: false
             };
             resetMultiWorkspace();
             modeBtn.disabled = true;
@@ -2655,12 +2767,40 @@
             session.items.forEach(function (item) {
                 if (item.reprintBtn) item.reprintBtn.disabled = true;
             });
-            multiSummaryEl.textContent = decision === "accept"
-                ? "Przenoszenie zwrotu w Base i zapisywanie decyzji..."
-                : "Zapisywanie decyzji „Do weryfikacji”...";
-            multiSummaryEl.style.color = "#3b82f6";
-
             try {
+                if (decision === "verify" && !session.rejectionLabelPrinted) {
+                    if (!isPrinterReady("multi")) {
+                        throw new Error(
+                            "Brak połączenia z drukarką ZD411 — nie wydrukowano etykiety z X."
+                        );
+                    }
+
+                    multiSummaryEl.textContent =
+                        "Drukowanie etykiety odrzuconego zwrotu " + session.returnId + " z X...";
+                    multiSummaryEl.style.color = "#f59e0b";
+
+                    const rejectionTiming = await printLabel(
+                        "WIELOSZTUKA - NIE PRZYJMOWAC",
+                        session.returnId,
+                        "rejected-return",
+                        "multi"
+                    );
+                    session.rejectionLabelPrinted = true;
+                    lastPrintedCode = session.returnId;
+                    lastPrintedTitle = "WIELOSZTUKA - NIE PRZYJMOWAC";
+                    lastPrintedImage = null;
+                    lastPrintedKind = "rejected-return";
+                    lastPrintedPrinterRole = "multi";
+                    multiProgressEl.textContent =
+                        "Etykieta z X przekazana do ZD411 w " +
+                        formatPrintDuration(rejectionTiming.total_ms);
+                }
+
+                multiSummaryEl.textContent = decision === "accept"
+                    ? "Przenoszenie zwrotu w Base i zapisywanie decyzji..."
+                    : "Etykieta z X gotowa — zapisuję decyzję „Do weryfikacji”...";
+                multiSummaryEl.style.color = "#3b82f6";
+
                 const extraData = { decision: decision };
                 if (decision === "verify") {
                     extraData.issues = Array.isArray(verificationIssues)
