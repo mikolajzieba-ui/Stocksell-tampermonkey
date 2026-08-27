@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      4.2.1
+// @version      4.2.2
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -2025,6 +2025,21 @@
             if (firstInvalid) {
                 firstInvalid.focus();
                 throw new Error("Wpisz opis problemu dla każdego zaznaczonego produktu.");
+            }
+
+            const baseComments = issues.map(function (issue) {
+                const safeDescription = String(issue.description || "")
+                    .replace(/[|\r\n]+/g, " / ")
+                    .replace(/\s+/g, " ")
+                    .trim();
+                return issue.code + "-" + safeDescription;
+            }).join("|");
+
+            if (baseComments.length > 200) {
+                throw new Error(
+                    "Opisy mają łącznie " + baseComments.length +
+                    " znaków, a pole Uwagi w Base mieści maksymalnie 200. Skróć opisy."
+                );
             }
 
             return issues;
