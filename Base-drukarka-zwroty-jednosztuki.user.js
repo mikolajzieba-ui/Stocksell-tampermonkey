@@ -1702,7 +1702,7 @@
         function resetMultiWorkspace() {
             multiGrid.innerHTML = "";
             multiGrid.dataset.layout = "large";
-            multiSummaryEl.textContent = "Zeskanuj numer zwrotu z fioletowej etykiety";
+            multiSummaryEl.textContent = "Zeskanuj numer zwrotu wielosztukowego";
             multiProgressEl.textContent = "";
             multiActions.style.display = "none";
             retryPrintBtn.style.display = "none";
