@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      4.2.2
+// @version      4.2.3
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -301,7 +301,7 @@
                 min-height: 0; overflow-y: auto; padding-right: 6px;
             }
             .stocksell-verification-row {
-                display: grid; grid-template-columns: 30px minmax(210px, 30%) minmax(0, 1fr);
+                display: grid; grid-template-columns: 30px 86px minmax(190px, 27%) minmax(0, 1fr);
                 gap: 10px; align-items: center; padding: 10px;
                 border: 1px solid var(--border-color); border-radius: 8px;
                 background: var(--input-bg);
@@ -309,6 +309,16 @@
             .stocksell-verification-row.is-selected { border-color: #f59e0b; }
             .stocksell-verification-row input[type="checkbox"] {
                 width: 21px; height: 21px; accent-color: #f59e0b; cursor: pointer;
+            }
+            .stocksell-verification-image {
+                width: 86px; height: 86px; overflow: hidden;
+                display: flex; align-items: center; justify-content: center;
+                border: 1px solid var(--border-color); border-radius: 7px;
+                background: #fff; color: #6b7280;
+                font-size: 10px; font-weight: 800; text-align: center;
+            }
+            .stocksell-verification-image img {
+                display: block; width: 100%; height: 100%; object-fit: contain;
             }
             .stocksell-verification-description {
                 width: 100%; min-height: 48px; max-height: 100px; resize: vertical;
@@ -338,8 +348,9 @@
             @media (max-width: 1000px) {
                 .stocksell-multi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
                 .stocksell-verification-row {
-                    grid-template-columns: 30px minmax(160px, 34%) minmax(0, 1fr);
+                    grid-template-columns: 30px 70px minmax(150px, 30%) minmax(0, 1fr);
                 }
+                .stocksell-verification-image { width: 70px; height: 70px; }
             }
             @media (max-height: 850px) {
                 .stocksell-multi-grid[data-layout="large"] .stocksell-multi-image {
@@ -1952,6 +1963,27 @@
                 const productInfo = document.createElement("div");
                 productInfo.style.cssText = "min-width:0;";
 
+                const imageWrap = document.createElement("div");
+                imageWrap.className = "stocksell-verification-image";
+
+                const imagePlaceholder = document.createElement("span");
+                imagePlaceholder.textContent = "Brak zdjęcia";
+
+                if (item.imageUrl) {
+                    const image = document.createElement("img");
+                    image.alt = "Zdjęcie produktu " + item.cleanCode;
+                    image.loading = "eager";
+                    image.decoding = "async";
+                    image.src = item.imageUrl;
+                    image.onerror = function () {
+                        image.remove();
+                        imageWrap.appendChild(imagePlaceholder);
+                    };
+                    imageWrap.appendChild(image);
+                } else {
+                    imageWrap.appendChild(imagePlaceholder);
+                }
+
                 const productCode = document.createElement("div");
                 productCode.textContent = "KOD: " + item.cleanCode;
                 productCode.style.cssText =
@@ -1982,7 +2014,7 @@
                     }
                 });
 
-                row.append(checkbox, productInfo, description);
+                row.append(checkbox, imageWrap, productInfo, description);
                 verificationList.appendChild(row);
                 verificationEditorRows.push({
                     item: item,
