@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      4.1.0
+// @version      4.1.1
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -55,7 +55,7 @@
     let baseStatusEl = null;
     let refreshBtn = null;
     let historyContainer = null;
-
+    
     // Zmienne do ponownego wydruku
     let lastPrintedCode = null;
     let lastPrintedTitle = null;
@@ -81,11 +81,11 @@
     function playErrorSound() {
         try {
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
-
+            
             function playBeep(freq, startTime, duration) {
                 const osc = ctx.createOscillator();
                 const gain = ctx.createGain();
-                osc.type = 'square';
+                osc.type = 'square'; 
                 osc.frequency.setValueAtTime(freq, startTime);
                 gain.gain.setValueAtTime(0.1, startTime);
                 gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
@@ -96,8 +96,8 @@
             }
 
             const now = ctx.currentTime;
-            playBeep(300, now, 0.15);
-            playBeep(200, now + 0.15, 0.2);
+            playBeep(300, now, 0.15);      
+            playBeep(200, now + 0.15, 0.2); 
         } catch (e) {
             console.error("Web Audio API nie jest wspierane", e);
         }
@@ -139,6 +139,12 @@
             }
             .stocksell-input:focus { border-color: #3b82f6; }
 
+            .stocksell-result:empty {
+                display: none;
+                min-height: 0 !important;
+                margin-top: 0 !important;
+            }
+            
             /* Stylowanie paska przewijania dla historii */
             .stocksell-scroll::-webkit-scrollbar { width: 8px; }
             .stocksell-scroll::-webkit-scrollbar-track { background: transparent; }
@@ -148,22 +154,115 @@
             .stocksell-multi-grid {
                 display: grid;
                 grid-template-columns: repeat(3, minmax(0, 1fr));
-                gap: 16px;
+                gap: 12px;
                 align-items: stretch;
             }
             .stocksell-multi-card {
                 min-width: 0;
                 border: 1px solid var(--border-color);
                 border-radius: 10px;
-                padding: 14px;
+                padding: 10px;
                 background: var(--input-bg);
                 display: flex;
                 flex-direction: column;
-                gap: 9px;
+                gap: 6px;
             }
             .stocksell-multi-card img {
-                width: 100%; height: 230px; object-fit: contain;
+                width: 100%; height: 100%; object-fit: contain;
                 border-radius: 8px; background: #ffffff;
+            }
+            .stocksell-multi-card-top {
+                display: flex; justify-content: space-between; align-items: center;
+                gap: 10px; min-width: 0;
+            }
+            .stocksell-multi-image {
+                height: 270px; display: flex; align-items: center;
+                justify-content: center; border-radius: 8px;
+                background: #ffffff; overflow: hidden; min-height: 0;
+            }
+            .stocksell-multi-grid[data-layout="large"] .stocksell-multi-image {
+                height: clamp(350px, 48vh, 500px);
+            }
+            .stocksell-multi-grid[data-layout="compact"] {
+                gap: 10px;
+            }
+            .stocksell-multi-grid[data-layout="compact"] .stocksell-multi-card {
+                padding: 8px; gap: 4px;
+            }
+            .stocksell-multi-grid[data-layout="compact"] .stocksell-multi-image {
+                height: clamp(190px, 21vh, 235px);
+            }
+            .stocksell-multi-grid[data-layout="dense"] .stocksell-multi-image {
+                height: 180px;
+            }
+
+            #stocksell-returns-scanner-wrapper.stocksell-multi-mode .stocksell-scanner-title {
+                font-size: 20px !important; margin-bottom: 7px !important;
+            }
+            #stocksell-returns-scanner-wrapper.stocksell-multi-mode .stocksell-scanner-panel {
+                top: 2vh !important;
+                height: 96vh !important;
+                padding: 14px 20px !important;
+            }
+            #stocksell-returns-scanner-wrapper.stocksell-multi-mode .stocksell-system-statuses {
+                display: grid;
+                grid-template-columns: repeat(5, minmax(0, 1fr));
+                gap: 5px 12px;
+                margin-bottom: 8px;
+                padding: 7px 10px;
+                border: 1px solid var(--border-color);
+                border-radius: 8px;
+                background: var(--input-bg);
+            }
+            #stocksell-returns-scanner-wrapper.stocksell-multi-mode .stocksell-system-statuses > div {
+                margin: 0 !important;
+                padding: 0 !important;
+                border: 0 !important;
+                font-size: 12.5px !important;
+                line-height: 1.35;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            #stocksell-returns-scanner-wrapper.stocksell-multi-mode .stocksell-scan-controls {
+                display: grid;
+                grid-template-columns: minmax(240px, 24%) minmax(0, 1fr);
+                gap: 10px;
+                align-items: stretch;
+            }
+            #stocksell-returns-scanner-wrapper.stocksell-multi-mode .stocksell-mode-btn {
+                margin: 0 !important;
+                padding: 9px 12px !important;
+                font-size: 15px !important;
+            }
+            #stocksell-returns-scanner-wrapper.stocksell-multi-mode .stocksell-input {
+                padding: 11px 14px;
+                font-size: 18px;
+            }
+            #stocksell-returns-scanner-wrapper.stocksell-multi-mode .stocksell-multi-workspace {
+                margin-top: 8px !important;
+                gap: 6px !important;
+            }
+            #stocksell-returns-scanner-wrapper.stocksell-multi-mode .stocksell-multi-grid-scroll {
+                padding: 2px 6px 6px 0 !important;
+            }
+            #stocksell-returns-scanner-wrapper.stocksell-multi-mode .stocksell-multi-header > :first-child {
+                font-size: 17px !important;
+            }
+            #stocksell-returns-scanner-wrapper.stocksell-multi-mode .stocksell-multi-header > :last-child {
+                font-size: 13px !important;
+            }
+            #stocksell-returns-scanner-wrapper.stocksell-multi-mode .stocksell-action-btn {
+                padding: 10px 12px !important;
+                font-size: 16px !important;
+            }
+            .stocksell-multi-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 16px;
+                min-height: 25px;
+                flex-shrink: 0;
             }
             .stocksell-action-btn:disabled,
             .stocksell-mode-btn:disabled {
@@ -171,7 +270,20 @@
             }
             @media (max-width: 1250px) {
                 .stocksell-multi-grid { gap: 10px; }
-                .stocksell-multi-card img { height: 175px; }
+                .stocksell-multi-grid[data-layout="large"] .stocksell-multi-image {
+                    height: clamp(280px, 43vh, 390px);
+                }
+                #stocksell-returns-scanner-wrapper.stocksell-multi-mode .stocksell-system-statuses {
+                    grid-template-columns: repeat(3, minmax(0, 1fr));
+                }
+            }
+            @media (max-height: 850px) {
+                .stocksell-multi-grid[data-layout="large"] .stocksell-multi-image {
+                    height: clamp(250px, 39vh, 360px);
+                }
+                .stocksell-multi-grid[data-layout="compact"] .stocksell-multi-image {
+                    height: 125px;
+                }
             }
         `;
         document.head.appendChild(style);
@@ -519,7 +631,7 @@
     function addScanToHistory(tracking, printCode, title, status) {
         recentScans.unshift({ tracking, printCode, title, status });
         // Twarde wymuszenie obcięcia bazy do 50 elementów (zabezpieczenie przed memory leakiem)
-        recentScans = recentScans.slice(0, 50);
+        recentScans = recentScans.slice(0, 50); 
         GM_setValue("returns_recent_scans_v1", JSON.stringify(recentScans));
         updateRecentScansUI();
     }
@@ -1374,15 +1486,18 @@
         toggleBtn.style.cssText = "position:fixed;bottom:30px;left:30px;z-index:9999999;background:#3b82f6;color:white;border:none;padding:12px 24px;border-radius:50px;font-size:15px;font-weight:bold;cursor:pointer;box-shadow:0 4px 15px rgba(0,0,0,.4);outline:none;";
 
         const panel = document.createElement("div");
+        panel.className = "stocksell-scanner-panel";
         panel.style.cssText = "display:none;position:fixed;top:3vh;left:2vw;z-index:9999998;width:96vw;height:94vh;box-sizing:border-box;background:var(--bg-panel);color:var(--text-main);border:2px solid #3b82f6;border-radius:12px;padding:24px 32px;box-shadow:0 10px 45px rgba(0,0,0,.6);";
 
         const contentRow = document.createElement("div");
         contentRow.style.cssText = "display:flex;gap:42px;align-items:stretch;height:100%;box-sizing:border-box;";
 
         const leftCol = document.createElement("div");
+        leftCol.className = "stocksell-left-column";
         leftCol.style.cssText = "flex:0 0 40%;display:flex;flex-direction:column;min-width:0;height:100%;";
 
         const title = document.createElement("div");
+        title.className = "stocksell-scanner-title";
         title.innerHTML = "<strong>📦 Skaner Zwrotów (Zebra)</strong>";
         title.style.cssText = "font-size:22px;color:var(--text-main);margin-bottom:14px;flex-shrink:0;";
 
@@ -1405,6 +1520,17 @@
         scanCounterEl.style.cssText = "font-size:15px;color:var(--text-sub);margin-bottom:14px;padding-bottom:12px;border-bottom:1px dashed var(--border-color);flex-shrink:0;";
         updateScanCounterUI();
 
+        const systemStatuses = document.createElement("div");
+        systemStatuses.className = "stocksell-system-statuses";
+        systemStatuses.style.cssText = "flex-shrink:0;";
+        systemStatuses.append(
+            returnsStatusEl,
+            productsStatusEl,
+            printerStatusEl,
+            baseStatusEl,
+            scanCounterEl
+        );
+
         const modeBtn = document.createElement("button");
         modeBtn.className = "stocksell-mode-btn";
         modeBtn.innerHTML = "🟣 Obsłuż zwroty wielosztukowe";
@@ -1416,6 +1542,11 @@
         input.className = "stocksell-input";
         input.autocomplete = "off";
 
+        const scanControls = document.createElement("div");
+        scanControls.className = "stocksell-scan-controls";
+        scanControls.style.cssText = "flex-shrink:0;";
+        scanControls.append(modeBtn, input);
+
         const reprintBtn = document.createElement("button");
         reprintBtn.innerHTML = "🖨️ Wydrukuj ostatni kod";
         reprintBtn.style.cssText = "margin-top:12px;width:100%;padding:13px;font-size:16px;background:#3b82f6;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:bold;box-shadow:0 4px 6px rgba(0,0,0,.1);flex-shrink:0;";
@@ -1425,9 +1556,11 @@
         retryRegistrationBtn.style.cssText = "display:none;margin-top:10px;width:100%;padding:13px;font-size:15px;background:#d97706;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:bold;flex-shrink:0;";
 
         const resultEl = document.createElement("div");
+        resultEl.className = "stocksell-result";
         resultEl.style.cssText = "margin-top:18px;font-size:18px;font-weight:bold;min-height:30px;text-align:center;flex-shrink:0;";
 
         const multiWorkspace = document.createElement("div");
+        multiWorkspace.className = "stocksell-multi-workspace";
         multiWorkspace.style.cssText = "display:none;flex:1;min-height:0;margin-top:14px;flex-direction:column;gap:10px;";
 
         const multiSummaryEl = document.createElement("div");
@@ -1436,8 +1569,12 @@
         const multiProgressEl = document.createElement("div");
         multiProgressEl.style.cssText = "font-size:15px;color:var(--text-muted);text-align:center;flex-shrink:0;";
 
+        const multiHeader = document.createElement("div");
+        multiHeader.className = "stocksell-multi-header";
+        multiHeader.append(multiSummaryEl, multiProgressEl);
+
         const multiGridScroll = document.createElement("div");
-        multiGridScroll.className = "stocksell-scroll";
+        multiGridScroll.className = "stocksell-scroll stocksell-multi-grid-scroll";
         multiGridScroll.style.cssText = "flex:1;min-height:0;overflow-y:auto;padding:4px 10px 10px 0;";
 
         const multiGrid = document.createElement("div");
@@ -1465,16 +1602,11 @@
         verifyBtn.style.cssText = "flex:1;padding:14px;background:#dc2626;color:#fff;border:none;border-radius:8px;font-size:18px;font-weight:900;cursor:pointer;";
 
         multiActions.append(retryPrintBtn, acceptBtn, verifyBtn);
-        multiWorkspace.append(multiSummaryEl, multiProgressEl, multiGridScroll, multiActions);
+        multiWorkspace.append(multiHeader, multiGridScroll, multiActions);
         leftCol.append(
             title,
-            returnsStatusEl,
-            productsStatusEl,
-            printerStatusEl,
-            baseStatusEl,
-            scanCounterEl,
-            modeBtn,
-            input,
+            systemStatuses,
+            scanControls,
             reprintBtn,
             retryRegistrationBtn,
             resultEl,
@@ -1569,7 +1701,8 @@
 
         function resetMultiWorkspace() {
             multiGrid.innerHTML = "";
-            multiSummaryEl.textContent = "Zeskanuj numer zwrotu wielosztukowego";
+            multiGrid.dataset.layout = "large";
+            multiSummaryEl.textContent = "Zeskanuj numer zwrotu z fioletowej etykiety";
             multiProgressEl.textContent = "";
             multiActions.style.display = "none";
             retryPrintBtn.style.display = "none";
@@ -1587,6 +1720,7 @@
             }
 
             multiMode = Boolean(enableMulti);
+            wrapper.classList.toggle("stocksell-multi-mode", multiMode);
             input.value = "";
             input.placeholder = multiMode
                 ? "Zeskanuj numer zwrotu..."
@@ -1653,24 +1787,37 @@
 
         function renderMultiItems(session) {
             multiGrid.innerHTML = "";
+            multiGrid.dataset.layout = session.items.length <= 3
+                ? "large"
+                : (session.items.length <= 6 ? "compact" : "dense");
+
             session.items.forEach(function (item) {
                 const card = document.createElement("div");
                 card.className = "stocksell-multi-card";
 
+                const cardTop = document.createElement("div");
+                cardTop.className = "stocksell-multi-card-top";
+
                 const number = document.createElement("div");
                 number.textContent = "Produkt " + (item.index + 1) + "/" + session.items.length;
-                number.style.cssText = "font-size:17px;font-weight:900;color:#7c3aed;";
+                number.style.cssText = "font-size:15px;font-weight:900;color:#7c3aed;";
+
+                const status = document.createElement("div");
+                status.textContent = "Oczekuje na druk";
+                status.style.cssText = "font-size:13px;font-weight:800;color:var(--text-muted);text-align:right;";
+
+                cardTop.append(number, status);
 
                 const cardTitle = document.createElement("div");
                 cardTitle.textContent = item.title;
-                cardTitle.style.cssText = "font-size:16px;font-weight:800;line-height:1.3;min-height:42px;overflow-wrap:anywhere;";
+                cardTitle.style.cssText = "font-size:15px;font-weight:800;line-height:1.2;min-height:36px;overflow-wrap:anywhere;";
 
                 const sku = document.createElement("div");
                 sku.textContent = "SKU: " + item.sku + "  •  kod: " + item.cleanCode;
-                sku.style.cssText = "font-family:monospace;font-size:13px;color:var(--text-muted);overflow-wrap:anywhere;";
+                sku.style.cssText = "font-family:monospace;font-size:12px;line-height:1.2;color:var(--text-muted);overflow-wrap:anywhere;";
 
                 const imageWrap = document.createElement("div");
-                imageWrap.style.cssText = "height:230px;display:flex;align-items:center;justify-content:center;border-radius:8px;background:#fff;overflow:hidden;";
+                imageWrap.className = "stocksell-multi-image";
 
                 const placeholder = document.createElement("div");
                 placeholder.textContent = "Brak zdjęcia";
@@ -1689,11 +1836,7 @@
                     imageWrap.appendChild(placeholder);
                 }
 
-                const status = document.createElement("div");
-                status.textContent = "Oczekuje na druk";
-                status.style.cssText = "font-size:14px;font-weight:800;color:var(--text-muted);";
-
-                card.append(number, cardTitle, sku, imageWrap, status);
+                card.append(cardTop, cardTitle, sku, imageWrap);
                 multiGrid.appendChild(card);
                 item.statusEl = status;
                 item.cardEl = card;
