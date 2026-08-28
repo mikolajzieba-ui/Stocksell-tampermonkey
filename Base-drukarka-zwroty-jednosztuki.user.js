@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      4.3.2
+// @version      4.3.3
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -171,7 +171,7 @@
                 background: var(--input-bg);
                 display: flex;
                 flex-direction: column;
-                gap: 6px;
+                gap: 4px;
             }
             .stocksell-multi-card img {
                 width: 100%; height: 100%; object-fit: contain;
@@ -206,7 +206,7 @@
                 background: #ffffff; overflow: hidden; min-height: 0;
             }
             .stocksell-multi-grid[data-layout="large"] .stocksell-multi-image {
-                height: clamp(280px, 38vh, 380px);
+                height: clamp(255px, 34vh, 340px);
             }
             .stocksell-multi-grid[data-layout="compact"] {
                 gap: 10px;
@@ -2273,23 +2273,18 @@
 
                 const number = document.createElement("div");
                 number.textContent = "Produkt " + (item.index + 1) + "/" + session.items.length;
-                number.style.cssText = "font-size:15px;font-weight:900;color:#7c3aed;";
+                number.style.cssText = "font-size:13px;line-height:1.15;font-weight:900;color:#7c3aed;";
 
                 const status = document.createElement("div");
                 status.textContent = "Oczekuje na druk";
-                status.style.cssText = "font-size:13px;font-weight:800;color:var(--text-muted);text-align:right;";
+                status.style.cssText = "font-size:11.5px;line-height:1.15;font-weight:800;color:var(--text-muted);text-align:right;";
 
                 cardTop.append(number, status);
 
                 const cardTitle = document.createElement("div");
                 cardTitle.textContent = item.title;
                 cardTitle.style.cssText =
-                    "font-size:13.5px;font-weight:800;line-height:1.17;min-height:32px;overflow-wrap:anywhere;";
-
-                const sku = document.createElement("div");
-                sku.textContent = "SKU: " + item.sku;
-                sku.style.cssText =
-                    "font-family:monospace;font-size:11px;line-height:1.15;color:var(--text-muted);overflow-wrap:anywhere;";
+                    "font-size:12px;font-weight:800;line-height:1.15;min-height:28px;overflow-wrap:anywhere;";
 
                 const productCodeRow = document.createElement("div");
                 productCodeRow.className = "stocksell-product-code-row";
@@ -2426,7 +2421,6 @@
                 card.append(
                     cardTop,
                     cardTitle,
-                    sku,
                     productCodeRow,
                     imageWrap,
                     verificationControl
@@ -3238,3 +3232,5 @@
     }, 500);
 
 })();
+
+
