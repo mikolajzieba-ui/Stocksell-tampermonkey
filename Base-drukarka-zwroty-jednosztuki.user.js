@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      4.3.3
+// @version      4.3.4
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -2909,9 +2909,9 @@
             });
             try {
                 if (decision === "verify" && !session.rejectionLabelPrinted) {
-                    if (!isPrinterReady("multi")) {
+                    if (!isPrinterReady("presort")) {
                         throw new Error(
-                            "Brak połączenia z drukarką ZD411 — nie wydrukowano etykiety z X."
+                            "Brak połączenia z drukarką ZD420 — nie wydrukowano etykiety z X."
                         );
                     }
 
@@ -2923,16 +2923,16 @@
                         "WIELOSZTUKA - NIE PRZYJMOWAC",
                         session.returnId,
                         "rejected-return",
-                        "multi"
+                        "presort"
                     );
                     session.rejectionLabelPrinted = true;
                     lastPrintedCode = session.returnId;
                     lastPrintedTitle = "WIELOSZTUKA - NIE PRZYJMOWAC";
                     lastPrintedImage = null;
                     lastPrintedKind = "rejected-return";
-                    lastPrintedPrinterRole = "multi";
+                    lastPrintedPrinterRole = "presort";
                     multiProgressEl.textContent =
-                        "Etykieta z X przekazana do ZD411 w " +
+                        "Etykieta z X przekazana do ZD420 w " +
                         formatPrintDuration(rejectionTiming.total_ms);
                 }
 
