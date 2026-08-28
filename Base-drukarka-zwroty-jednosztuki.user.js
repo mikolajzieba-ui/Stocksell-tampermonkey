@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      4.3.1
+// @version      4.3.2
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -206,7 +206,7 @@
                 background: #ffffff; overflow: hidden; min-height: 0;
             }
             .stocksell-multi-grid[data-layout="large"] .stocksell-multi-image {
-                height: clamp(350px, 48vh, 500px);
+                height: clamp(280px, 38vh, 380px);
             }
             .stocksell-multi-grid[data-layout="compact"] {
                 gap: 10px;
@@ -215,10 +215,10 @@
                 padding: 8px; gap: 4px;
             }
             .stocksell-multi-grid[data-layout="compact"] .stocksell-multi-image {
-                height: clamp(190px, 21vh, 235px);
+                height: clamp(165px, 19vh, 205px);
             }
             .stocksell-multi-grid[data-layout="dense"] .stocksell-multi-image {
-                height: 180px;
+                height: 150px;
             }
 
             #stocksell-returns-scanner-wrapper.stocksell-multi-mode .stocksell-scanner-title {
@@ -290,8 +290,8 @@
                 flex-shrink: 0;
             }
             .stocksell-card-verification {
-                display: none; flex-direction: column; gap: 7px;
-                padding: 9px; border: 2px solid var(--border-color);
+                display: none; flex-direction: column; gap: 5px;
+                padding: 7px; border: 2px solid var(--border-color);
                 border-radius: 8px; background: var(--input-bg);
             }
             .stocksell-multi-grid.is-verification-mode .stocksell-card-verification {
@@ -301,27 +301,48 @@
                 border-color: #f59e0b;
                 background: color-mix(in srgb, #f59e0b 10%, var(--input-bg));
             }
-            .stocksell-verification-selector {
-                display: flex; align-items: center; gap: 8px;
-                color: #f59e0b; font-size: 14px; font-weight: 900;
+            .stocksell-verification-option {
+                display: flex; align-items: center; gap: 7px;
+                color: var(--text-main); font-size: 12.5px; font-weight: 800;
                 cursor: pointer;
             }
-            .stocksell-verification-selector input[type="checkbox"] {
-                width: 21px; height: 21px; margin: 0;
+            .stocksell-verification-option input[type="checkbox"] {
+                width: 18px; height: 18px; margin: 0;
                 accent-color: #f59e0b; cursor: pointer; flex-shrink: 0;
             }
             .stocksell-verification-description {
-                box-sizing: border-box; width: 100%; min-height: 58px;
-                max-height: 120px; resize: vertical; padding: 8px 9px;
+                display: none; box-sizing: border-box; width: 100%; height: 38px;
+                padding: 7px 8px;
                 border: 2px solid var(--input-border);
                 border-radius: 7px; background: var(--bg-panel); color: var(--text-main);
-                font-size: 13px; line-height: 1.25;
+                font-size: 12.5px; line-height: 1.2;
+            }
+            .stocksell-card-verification.has-custom .stocksell-verification-description {
+                display: block;
             }
             .stocksell-verification-description:focus { border-color: #f59e0b; outline: none; }
             .stocksell-verification-description:disabled { opacity: 0.45; cursor: not-allowed; }
             .stocksell-inline-verification-footer {
                 display: none; flex-direction: column; gap: 6px; flex-shrink: 0;
                 padding-top: 8px; border-top: 1px solid var(--border-color);
+            }
+            .stocksell-return-verification {
+                display: flex; align-items: center; justify-content: center;
+                flex-wrap: wrap; gap: 8px 22px; padding: 7px 10px;
+                border: 2px solid #f59e0b; border-radius: 8px;
+                background: var(--input-bg);
+            }
+            .stocksell-return-verification-title {
+                color: #f59e0b; font-size: 14px; font-weight: 950;
+            }
+            .stocksell-return-verification label {
+                display: flex; align-items: center; gap: 7px;
+                color: var(--text-main); font-size: 14px; font-weight: 850;
+                cursor: pointer;
+            }
+            .stocksell-return-verification input[type="checkbox"] {
+                width: 19px; height: 19px; margin: 0;
+                accent-color: #f59e0b; cursor: pointer;
             }
             .stocksell-verification-actions {
                 display: flex; gap: 12px; flex-shrink: 0;
@@ -333,7 +354,7 @@
             @media (max-width: 1250px) {
                 .stocksell-multi-grid { gap: 10px; }
                 .stocksell-multi-grid[data-layout="large"] .stocksell-multi-image {
-                    height: clamp(280px, 43vh, 390px);
+                    height: clamp(250px, 35vh, 330px);
                 }
                 #stocksell-returns-scanner-wrapper.stocksell-multi-mode .stocksell-system-statuses {
                     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -344,10 +365,10 @@
             }
             @media (max-height: 850px) {
                 .stocksell-multi-grid[data-layout="large"] .stocksell-multi-image {
-                    height: clamp(250px, 39vh, 360px);
+                    height: clamp(215px, 31vh, 275px);
                 }
                 .stocksell-multi-grid[data-layout="compact"] .stocksell-multi-image {
-                    height: 125px;
+                    height: 115px;
                 }
             }
         `;
@@ -1831,9 +1852,48 @@
         const inlineVerificationFooter = document.createElement("div");
         inlineVerificationFooter.className = "stocksell-inline-verification-footer";
 
+        const returnVerification = document.createElement("div");
+        returnVerification.className = "stocksell-return-verification";
+
+        const returnVerificationTitle = document.createElement("div");
+        returnVerificationTitle.className = "stocksell-return-verification-title";
+        returnVerificationTitle.textContent = "Problem dotyczący całego zwrotu:";
+
+        function createReturnVerificationOption(text) {
+            const label = document.createElement("label");
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.setAttribute("aria-label", text);
+            const caption = document.createElement("span");
+            caption.textContent = text;
+            label.append(checkbox, caption);
+            return { label: label, checkbox: checkbox };
+        }
+
+        const extraItemReturnOption = createReturnVerificationOption(
+            "dodatkowa rzecz w paczce"
+        );
+        const wrongContentsReturnOption = createReturnVerificationOption(
+            "błędna zawartość"
+        );
+        returnVerification.append(
+            returnVerificationTitle,
+            extraItemReturnOption.label,
+            wrongContentsReturnOption.label
+        );
+
         const verificationMessage = document.createElement("div");
         verificationMessage.style.cssText =
             "min-height:20px;font-size:14px;font-weight:800;color:#ef4444;flex-shrink:0;";
+
+        [
+            extraItemReturnOption.checkbox,
+            wrongContentsReturnOption.checkbox
+        ].forEach(function (checkbox) {
+            checkbox.addEventListener("change", function () {
+                verificationMessage.textContent = "";
+            });
+        });
 
         const verificationActions = document.createElement("div");
         verificationActions.className = "stocksell-verification-actions";
@@ -1849,7 +1909,11 @@
             "flex:2;padding:12px;background:#d97706;color:#fff;border:none;border-radius:8px;font-size:17px;font-weight:900;cursor:pointer;";
 
         verificationActions.append(cancelVerificationBtn, saveVerificationBtn);
-        inlineVerificationFooter.append(verificationMessage, verificationActions);
+        inlineVerificationFooter.append(
+            returnVerification,
+            verificationMessage,
+            verificationActions
+        );
         multiWorkspace.appendChild(inlineVerificationFooter);
 
         leftCol.append(
@@ -1954,12 +2018,16 @@
             inlineVerificationFooter.style.display = "none";
             verificationMessage.textContent = "";
             verificationEditorRows.forEach(function (entry) {
-                entry.checkbox.checked = false;
-                entry.description.value = "";
-                entry.description.disabled = true;
-                entry.description.style.borderColor = "";
-                entry.row.classList.remove("is-selected");
+                Object.values(entry.checkboxes).forEach(function (checkbox) {
+                    checkbox.checked = false;
+                });
+                entry.customInput.value = "";
+                entry.customInput.disabled = true;
+                entry.customInput.style.borderColor = "";
+                entry.row.classList.remove("is-selected", "has-custom");
             });
+            extraItemReturnOption.checkbox.checked = false;
+            wrongContentsReturnOption.checkbox.checked = false;
             verificationEditorRows = [];
             saveVerificationBtn.disabled = false;
             cancelVerificationBtn.disabled = false;
@@ -1987,19 +2055,21 @@
             closeVerificationEditor(false);
             session.items.forEach(function (item) {
                 const row = item.verificationEl;
-                const checkbox = item.verificationCheckbox;
-                const description = item.verificationDescription;
-                if (!row || !checkbox || !description) return;
+                const checkboxes = item.verificationCheckboxes;
+                const customInput = item.verificationDescription;
+                if (!row || !checkboxes || !customInput) return;
 
-                checkbox.checked = false;
-                description.value = "";
-                description.disabled = true;
-                row.classList.remove("is-selected");
+                Object.values(checkboxes).forEach(function (checkbox) {
+                    checkbox.checked = false;
+                });
+                customInput.value = "";
+                customInput.disabled = true;
+                row.classList.remove("is-selected", "has-custom");
                 verificationEditorRows.push({
                     item: item,
                     row: row,
-                    checkbox: checkbox,
-                    description: description
+                    checkboxes: checkboxes,
+                    customInput: customInput
                 });
             });
 
@@ -2008,42 +2078,75 @@
             inlineVerificationFooter.style.display = "flex";
             multiSummaryEl.textContent =
                 "🔎 Zwrot " + session.returnId +
-                " — zaznacz problematyczne produkty i opisz problemy pod zdjęciami";
+                " — wybierz problemy pod odpowiednimi zdjęciami";
             multiSummaryEl.style.color = "#f59e0b";
             multiProgressEl.textContent =
-                "Kod i opis zostaną zapisane w logach oraz w Uwagach Base";
+                "Możesz też zaznaczyć problem dotyczący całego zwrotu";
         }
 
         function collectVerificationIssues() {
-            const selectedRows = verificationEditorRows.filter(function (entry) {
-                return entry.checkbox.checked;
-            });
-
-            if (!selectedRows.length) {
-                throw new Error("Zaznacz przynajmniej jeden produkt do weryfikacji.");
-            }
-
             const issues = [];
             let firstInvalid = null;
 
-            selectedRows.forEach(function (entry) {
-                const description = String(entry.description.value || "")
-                    .replace(/\s+/g, " ")
-                    .trim();
+            verificationEditorRows.forEach(function (entry) {
+                const code = String(entry.item.cleanCode || "").trim();
 
-                entry.description.style.borderColor = description ? "" : "#ef4444";
-                if (!description && !firstInvalid) firstInvalid = entry.description;
-                if (description) {
+                if (entry.checkboxes.missing.checked) {
                     issues.push({
-                        code: String(entry.item.cleanCode || "").trim(),
-                        description: description
+                        code: code,
+                        description: "brakująca rzecz w paczce"
                     });
+                }
+
+                if (entry.checkboxes.damaged.checked) {
+                    issues.push({
+                        code: code,
+                        description: "uszkodzony produkt"
+                    });
+                }
+
+                if (entry.checkboxes.custom.checked) {
+                    const customDescription = String(entry.customInput.value || "")
+                        .replace(/\s+/g, " ")
+                        .trim();
+                    entry.customInput.style.borderColor = customDescription
+                        ? ""
+                        : "#ef4444";
+                    if (!customDescription && !firstInvalid) {
+                        firstInvalid = entry.customInput;
+                    }
+                    if (customDescription) {
+                        issues.push({
+                            code: code,
+                            description: customDescription
+                        });
+                    }
                 }
             });
 
             if (firstInvalid) {
                 firstInvalid.focus();
-                throw new Error("Wpisz opis problemu dla każdego zaznaczonego produktu.");
+                throw new Error("Wpisz własny opis przy zaznaczonej opcji „Wpisz własne”.");
+            }
+
+            if (extraItemReturnOption.checkbox.checked) {
+                issues.push({
+                    code: "ZWROT",
+                    description: "dodatkowa rzecz w paczce"
+                });
+            }
+
+            if (wrongContentsReturnOption.checkbox.checked) {
+                issues.push({
+                    code: "ZWROT",
+                    description: "błędna zawartość"
+                });
+            }
+
+            if (!issues.length) {
+                throw new Error(
+                    "Wybierz przynajmniej jeden problem produktu lub całego zwrotu."
+                );
             }
 
             const baseComments = issues.map(function (issue) {
@@ -2149,7 +2252,7 @@
                     cardEl: null,
                     reprintBtn: null,
                     verificationEl: null,
-                    verificationCheckbox: null,
+                    verificationCheckboxes: null,
                     verificationDescription: null
                 };
             });
@@ -2237,48 +2340,86 @@
                 const verificationControl = document.createElement("div");
                 verificationControl.className = "stocksell-card-verification";
 
-                const verificationSelector = document.createElement("label");
-                verificationSelector.className = "stocksell-verification-selector";
+                function createProductVerificationOption(text) {
+                    const label = document.createElement("label");
+                    label.className = "stocksell-verification-option";
+                    const checkbox = document.createElement("input");
+                    checkbox.type = "checkbox";
+                    checkbox.setAttribute(
+                        "aria-label",
+                        text + " — produkt " + item.cleanCode
+                    );
+                    const caption = document.createElement("span");
+                    caption.textContent = text;
+                    label.append(checkbox, caption);
+                    return { label: label, checkbox: checkbox };
+                }
 
-                const verificationCheckbox = document.createElement("input");
-                verificationCheckbox.type = "checkbox";
-                verificationCheckbox.setAttribute(
-                    "aria-label",
-                    "Zgłoś problem z produktem " + item.cleanCode
+                const missingOption = createProductVerificationOption(
+                    "brakująca rzecz w paczce"
                 );
-
-                const verificationSelectorText = document.createElement("span");
-                verificationSelectorText.textContent = "Zgłoś problem z tym produktem";
-                verificationSelector.append(
-                    verificationCheckbox,
-                    verificationSelectorText
+                const damagedOption = createProductVerificationOption(
+                    "uszkodzony produkt"
                 );
+                const customOption = createProductVerificationOption("Wpisz własne");
 
-                const verificationDescription = document.createElement("textarea");
+                const verificationDescription = document.createElement("input");
+                verificationDescription.type = "text";
                 verificationDescription.className = "stocksell-verification-description";
-                verificationDescription.placeholder = "Opisz, co jest nie tak z tym produktem...";
+                verificationDescription.placeholder = "Wpisz własny problem...";
                 verificationDescription.maxLength = 250;
                 verificationDescription.disabled = true;
 
-                verificationCheckbox.addEventListener("change", function () {
-                    verificationDescription.disabled = !verificationCheckbox.checked;
+                const verificationCheckboxes = {
+                    missing: missingOption.checkbox,
+                    damaged: damagedOption.checkbox,
+                    custom: customOption.checkbox
+                };
+
+                function updateProductVerification() {
+                    const anySelected = Object.values(verificationCheckboxes).some(
+                        function (checkbox) { return checkbox.checked; }
+                    );
+                    const customSelected = verificationCheckboxes.custom.checked;
                     verificationControl.classList.toggle(
                         "is-selected",
-                        verificationCheckbox.checked
+                        anySelected
                     );
-                    if (verificationCheckbox.checked) {
-                        verificationMessage.textContent = "";
-                        setTimeout(function () {
-                            verificationDescription.focus();
-                        }, 0);
-                    } else {
+                    verificationControl.classList.toggle("has-custom", customSelected);
+                    verificationDescription.disabled = !customSelected;
+                    if (!customSelected) {
                         verificationDescription.value = "";
                         verificationDescription.style.borderColor = "";
+                    }
+                    verificationMessage.textContent = "";
+                }
+
+                Object.values(verificationCheckboxes).forEach(function (checkbox) {
+                    checkbox.addEventListener("change", function () {
+                        updateProductVerification();
+                        if (checkbox === verificationCheckboxes.custom && checkbox.checked) {
+                            verificationDescription.style.borderColor = "";
+                            verificationDescription.disabled = false;
+                            verificationControl.classList.add("has-custom");
+                            verificationMessage.textContent = "";
+                            setTimeout(function () {
+                                verificationDescription.focus();
+                            }, 0);
+                        }
+                    });
+                });
+
+                verificationDescription.addEventListener("input", function () {
+                    if (verificationDescription.value.trim()) {
+                        verificationDescription.style.borderColor = "";
+                        verificationMessage.textContent = "";
                     }
                 });
 
                 verificationControl.append(
-                    verificationSelector,
+                    missingOption.label,
+                    damagedOption.label,
+                    customOption.label,
                     verificationDescription
                 );
 
@@ -2295,7 +2436,7 @@
                 item.cardEl = card;
                 item.reprintBtn = cardReprintBtn;
                 item.verificationEl = verificationControl;
-                item.verificationCheckbox = verificationCheckbox;
+                item.verificationCheckboxes = verificationCheckboxes;
                 item.verificationDescription = verificationDescription;
             });
         }
