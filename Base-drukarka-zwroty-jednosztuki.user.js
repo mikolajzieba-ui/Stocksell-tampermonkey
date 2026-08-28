@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      4.3.6
+// @version      4.3.7
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -1743,27 +1743,28 @@
 
         return `
 ^XA
+^CI28
 ^PW456
-^LL256
+^LL1200
 ^LH0,0
-^FO8,5
-^GB440,30,3^FS
-^FO14,10
-^A0N,20,20
-^FB428,1,0,C,0
+^FO12,32
+^GB432,48,3^FS
+^FO20,44
+^A0N,26,26
+^FB416,1,0,C,0
 ^FD${safeHeader}^FS
-^FO0,38
-^A0N,38,38
+^FO0,105
+^A0N,58,58
 ^FB456,1,0,C,0
 ^FD${safeReturnId}^FS
-^FO60,74
-^BY3,2,55
-^BCN,55,N,N,N
+^FO60,185
+^BY3,2,220
+^BCN,220,N,N,N
 ^FD${safeReturnId}^FS
-^FO22,137
-^GD412,111,22,B,R^FS
-^FO22,137
-^GD412,111,22,B,L^FS
+^FO22,500
+^GD412,650,38,B,R^FS
+^FO22,500
+^GD412,650,38,B,L^FS
 ^XZ`;
     }
 
