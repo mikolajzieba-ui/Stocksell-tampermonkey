@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      4.3.4
+// @version      4.3.5
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -343,6 +343,20 @@
             .stocksell-return-verification input[type="checkbox"] {
                 width: 19px; height: 19px; margin: 0;
                 accent-color: #f59e0b; cursor: pointer;
+            }
+            .stocksell-return-verification-description {
+                display: none; flex: 1 0 100%; box-sizing: border-box;
+                width: 100%; max-width: 760px; height: 38px;
+                padding: 7px 10px; margin: 0 auto;
+                border: 2px solid var(--input-border); border-radius: 7px;
+                background: var(--bg-panel); color: var(--text-main);
+                font-size: 13px; line-height: 1.2;
+            }
+            .stocksell-return-verification.has-custom .stocksell-return-verification-description {
+                display: block;
+            }
+            .stocksell-return-verification-description:focus {
+                border-color: #f59e0b; outline: none;
             }
             .stocksell-verification-actions {
                 display: flex; gap: 12px; flex-shrink: 0;
@@ -1645,18 +1659,18 @@
 ^A0N,20,20
 ^FB428,1,0,C,0
 ^FD${safeHeader}^FS
-^FO0,39
-^A0N,47,47
+^FO0,38
+^A0N,38,38
 ^FB456,1,0,C,0
 ^FD${safeReturnId}^FS
-^FO0,76
-^A0N,176,176
-^FB456,1,0,C,0
-^FDX^FS
-^FO3,76
-^A0N,176,176
-^FB456,1,0,C,0
-^FDX^FS
+^FO60,74
+^BY3,2,55
+^BCN,55,N,N,N
+^FD${safeReturnId}^FS
+^FO22,137
+^GD412,111,22,B,R^FS
+^FO22,137
+^GD412,111,22,B,L^FS
 ^XZ`;
     }
 
@@ -1876,10 +1890,21 @@
         const wrongContentsReturnOption = createReturnVerificationOption(
             "błędna zawartość"
         );
+        const customReturnOption = createReturnVerificationOption("Wpisz własne");
+
+        const customReturnDescription = document.createElement("input");
+        customReturnDescription.type = "text";
+        customReturnDescription.className = "stocksell-return-verification-description";
+        customReturnDescription.placeholder = "Wpisz problem dotyczący całego zwrotu...";
+        customReturnDescription.maxLength = 250;
+        customReturnDescription.disabled = true;
+
         returnVerification.append(
             returnVerificationTitle,
             extraItemReturnOption.label,
-            wrongContentsReturnOption.label
+            wrongContentsReturnOption.label,
+            customReturnOption.label,
+            customReturnDescription
         );
 
         const verificationMessage = document.createElement("div");
@@ -1888,11 +1913,33 @@
 
         [
             extraItemReturnOption.checkbox,
-            wrongContentsReturnOption.checkbox
+            wrongContentsReturnOption.checkbox,
+            customReturnOption.checkbox
         ].forEach(function (checkbox) {
             checkbox.addEventListener("change", function () {
                 verificationMessage.textContent = "";
             });
+        });
+
+        customReturnOption.checkbox.addEventListener("change", function () {
+            const customSelected = customReturnOption.checkbox.checked;
+            returnVerification.classList.toggle("has-custom", customSelected);
+            customReturnDescription.disabled = !customSelected;
+            customReturnDescription.style.borderColor = "";
+            if (!customSelected) {
+                customReturnDescription.value = "";
+            } else {
+                setTimeout(function () {
+                    customReturnDescription.focus();
+                }, 0);
+            }
+        });
+
+        customReturnDescription.addEventListener("input", function () {
+            if (customReturnDescription.value.trim()) {
+                customReturnDescription.style.borderColor = "";
+                verificationMessage.textContent = "";
+            }
         });
 
         const verificationActions = document.createElement("div");
@@ -2028,6 +2075,11 @@
             });
             extraItemReturnOption.checkbox.checked = false;
             wrongContentsReturnOption.checkbox.checked = false;
+            customReturnOption.checkbox.checked = false;
+            customReturnDescription.value = "";
+            customReturnDescription.disabled = true;
+            customReturnDescription.style.borderColor = "";
+            returnVerification.classList.remove("has-custom");
             verificationEditorRows = [];
             saveVerificationBtn.disabled = false;
             cancelVerificationBtn.disabled = false;
@@ -2140,6 +2192,25 @@
                 issues.push({
                     code: "ZWROT",
                     description: "błędna zawartość"
+                });
+            }
+
+            if (customReturnOption.checkbox.checked) {
+                const customReturnText = String(customReturnDescription.value || "")
+                    .replace(/\s+/g, " ")
+                    .trim();
+                customReturnDescription.style.borderColor = customReturnText
+                    ? ""
+                    : "#ef4444";
+                if (!customReturnText) {
+                    customReturnDescription.focus();
+                    throw new Error(
+                        "Wpisz własny opis problemu dotyczącego całego zwrotu."
+                    );
+                }
+                issues.push({
+                    code: "ZWROT",
+                    description: customReturnText
                 });
             }
 
