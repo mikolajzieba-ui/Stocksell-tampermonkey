@@ -10,6 +10,8 @@
 // @grant        GM_addStyle
 // @grant        unsafeWindow
 // @connect      allegro.pl
+// @downloadURL  https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Stocksell-usprawnienia-pakowanie.user.js
+// @updateURL    https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Stocksell-usprawnienia-pakowanie.user.js
 // ==/UserScript==
 
 (function () {
