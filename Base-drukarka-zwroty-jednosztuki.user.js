@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      4.3.7
+// @version      4.4.0
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -66,6 +66,7 @@
     let lastPrintedImage = null;
     let lastPrintedKind = "product";
     let lastPrintedPrinterRole = "presort";
+    let lastPrintedOptions = {};
 
     let recentScans = JSON.parse(GM_getValue("returns_recent_scans_v1", "[]"));
     let currentTheme = GM_getValue("stocksell_theme", "dark");
@@ -469,6 +470,7 @@
         }
 
         const expectedActions = {
+            multi_package_prepare: "multi_package_prepared",
             multi_label_printed: "multi_registered",
             multi_return_state: "multi_state",
             multi_resolve: "multi_resolved"
@@ -656,7 +658,7 @@
                     // Kolejne odświeżenie pobierze już snapshot bez tego statusu.
                     returnsCache.delete(String(item.tracking || "").trim().toLowerCase());
                     returnsById.delete(String(item.return_id || "").trim());
-                    GM_setValue("stocksell_returns_time", "0");
+                    GM_setValue("stocksell_returns_time_v2", "0");
 
                     console.info(
                         `[RETURNS API] Zwrot ${result.return_id} przeniesiony do statusu ${result.status_id}`
@@ -776,12 +778,51 @@
         returnsCache.clear();
         returnsById.clear();
 
+        const groupedByReturnId = new Map();
+
         returns.forEach(ret => {
             const tracking = String(ret.tracking || "").trim().toLowerCase();
             const returnId = String(ret.return_id || ret.return_nr || "").trim();
 
             if (tracking) returnsCache.set(tracking, ret);
-            if (returnId) returnsById.set(returnId, ret);
+            if (returnId) {
+                if (!groupedByReturnId.has(returnId)) groupedByReturnId.set(returnId, []);
+                groupedByReturnId.get(returnId).push(ret);
+            }
+        });
+
+        groupedByReturnId.forEach(function (packages, returnId) {
+            const primary = packages[0];
+            const multiPackages = packages.filter(function (item) {
+                return String(item.accepted || "").trim().toLowerCase() === "wielosztuka";
+            });
+
+            if (multiPackages.length <= 1) {
+                returnsById.set(returnId, multiPackages[0] || primary);
+                return;
+            }
+
+            returnsById.set(returnId, {
+                ...primary,
+                tracking: "",
+                return_nr: returnId,
+                return_id: returnId,
+                accepted: "wielosztuka",
+                package_total: multiPackages.length,
+                packages: multiPackages,
+                print_code: multiPackages.map(function (item) {
+                    return String(item.print_code || item.sku || "");
+                }).join(" | "),
+                sku: multiPackages.map(function (item) {
+                    return String(item.print_code || item.sku || "");
+                }).join(" | "),
+                title: multiPackages.map(function (item) {
+                    return String(item.title || "");
+                }).join(" | "),
+                image_url: multiPackages.map(function (item) {
+                    return String(item.image_url || "");
+                }).join(" | ")
+            });
         });
     }
 
@@ -789,8 +830,8 @@
         if (!RETURNS_API_URL) return;
         if (returnsLoading) return;
 
-        const CACHE_KEY = "stocksell_returns_v1";
-        const CACHE_TIME_KEY = "stocksell_returns_time";
+        const CACHE_KEY = "stocksell_returns_v2";
+        const CACHE_TIME_KEY = "stocksell_returns_time_v2";
         const CACHE_TTL = 5 * 60 * 60 * 1000;
 
         const cachedData = GM_getValue(CACHE_KEY, null);
@@ -1476,7 +1517,7 @@
         });
     }
 
-    function printLabel(title, code, labelKind, printerRole) {
+    function printLabel(title, code, labelKind, printerRole, labelOptions = {}) {
         const normalizedKind = labelKind || "product";
         const normalizedPrinterRole = PRINTER_ROLES[printerRole] ? printerRole : "presort";
         const jobId = ++printJobSequence;
@@ -1501,7 +1542,11 @@
         const zplStartedMs = monotonicNow();
         try {
             if (normalizedKind === "multi-return") {
-                zpl = createMultiReturnZPL(code);
+                zpl = createMultiReturnZPL(
+                    code,
+                    labelOptions.packageIndex,
+                    labelOptions.packageTotal
+                );
             } else if (normalizedKind === "rejected-return") {
                 zpl = createRejectedReturnZPL(code, title);
             } else {
@@ -1693,10 +1738,57 @@
 ^XZ`;
     }
 
-    function createMultiReturnZPL(returnId) {
+    function createMultiReturnZPL(returnId, packageIndex, packageTotal) {
         const safeReturnId = String(returnId || "").trim();
         if (!/^\d+$/.test(safeReturnId)) {
             throw new Error("Numer zwrotu na etykiecie musi zawierać wyłącznie cyfry");
+        }
+
+        const total = Number(packageTotal) || 1;
+        const index = Number(packageIndex) || 1;
+        const isMultiPackage = total > 1;
+        if (
+            !Number.isInteger(total) ||
+            !Number.isInteger(index) ||
+            total < 1 ||
+            index < 1 ||
+            index > total
+        ) {
+            throw new Error("Nieprawidłowy numer paczki zwrotu");
+        }
+
+        if (isMultiPackage) {
+            return `
+^XA
+^CI28
+^PW456
+^LL256
+^LH0,0
+^FO15,7
+^GB426,38,4^FS
+^FO25,14
+^A0N,24,24
+^FB406,1,0,C,0
+^FDWIELOSZTUKA^FS
+^FO20,51
+^BY3,2,74
+^BCN,70,N,N,N
+^FD${safeReturnId}^FS
+^FO20,125
+^A0N,43,43
+^FB416,1,0,C,0
+^FD${safeReturnId}^FS
+^FO12,174
+^A0N,19,19
+^FB432,1,0,C,0
+^FDZWROT W KILKU PACZKACH - ${index}/${total}^FS
+^FO15,211
+^GB426,38,3^FS
+^FO20,219
+^A0N,20,20
+^FB416,1,0,C,0
+^FDODLOZ DO WIELOSZTUK^FS
+^XZ`;
         }
 
         return `
@@ -1942,6 +2034,16 @@
         retryPrintBtn.innerHTML = "🔄 Ponów niewydrukowane";
         retryPrintBtn.style.cssText = "display:none;flex:1;padding:14px;background:#d97706;color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:800;cursor:pointer;";
 
+        const startMultiPrintBtn = document.createElement("button");
+        startMultiPrintBtn.className = "stocksell-action-btn";
+        startMultiPrintBtn.innerHTML = "🖨️ Mam wszystkie paczki — drukuj kody";
+        startMultiPrintBtn.style.cssText = "display:none;flex:2;padding:14px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:17px;font-weight:900;cursor:pointer;";
+
+        const deferMultiBtn = document.createElement("button");
+        deferMultiBtn.className = "stocksell-action-btn";
+        deferMultiBtn.innerHTML = "📦 Odłóż i wróć później";
+        deferMultiBtn.style.cssText = "display:none;flex:1;padding:14px;background:#4b5563;color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:900;cursor:pointer;";
+
         const acceptBtn = document.createElement("button");
         acceptBtn.className = "stocksell-action-btn";
         acceptBtn.innerHTML = "✅ Przyjmij";
@@ -1954,7 +2056,13 @@
         verifyBtn.disabled = true;
         verifyBtn.style.cssText = "flex:1;padding:14px;background:#dc2626;color:#fff;border:none;border-radius:8px;font-size:18px;font-weight:900;cursor:pointer;";
 
-        multiActions.append(retryPrintBtn, acceptBtn, verifyBtn);
+        multiActions.append(
+            startMultiPrintBtn,
+            deferMultiBtn,
+            retryPrintBtn,
+            acceptBtn,
+            verifyBtn
+        );
         multiWorkspace.append(multiHeader, multiGridScroll, multiActions);
 
         const inlineVerificationFooter = document.createElement("div");
@@ -2338,7 +2446,14 @@
             multiSummaryEl.textContent = "Zeskanuj numer zwrotu wielosztukowego";
             multiProgressEl.textContent = "";
             multiActions.style.display = "none";
+            startMultiPrintBtn.style.display = "none";
+            startMultiPrintBtn.disabled = true;
+            startMultiPrintBtn.innerHTML = "🖨️ Mam wszystkie paczki — drukuj kody";
+            deferMultiBtn.style.display = "none";
+            deferMultiBtn.disabled = false;
             retryPrintBtn.style.display = "none";
+            acceptBtn.style.display = "block";
+            verifyBtn.style.display = "block";
             acceptBtn.disabled = true;
             verifyBtn.disabled = true;
             closeVerificationEditor(false);
@@ -2627,6 +2742,7 @@
                 lastPrintedImage = item.imageUrl;
                 lastPrintedKind = "product";
                 lastPrintedPrinterRole = "multi";
+                lastPrintedOptions = {};
             } catch (error) {
                 playErrorSound();
                 item.statusEl.textContent = "❌ " + (error.message || String(error));
@@ -2664,14 +2780,18 @@
                 return result;
             }
 
+            const packageSuffix = Number(result.package_total) > 1
+                ? " — paczka " + result.package_index + "/" + result.package_total
+                : "";
             showResult(
-                "ODŁÓŻ DO WIELOSZTUK — zwrot " + (retData.return_id || retData.return_nr),
+                "ODŁÓŻ DO WIELOSZTUK — zwrot " +
+                (retData.return_id || retData.return_nr) + packageSuffix,
                 "#7c3aed"
             );
             addScanToHistory(
                 retData.tracking,
                 String(retData.return_id || retData.return_nr),
-                "Wielosztuka – odłożono do drugiego etapu",
+                "Wielosztuka – odłożono do drugiego etapu" + packageSuffix,
                 "multi"
             );
             return result;
@@ -2689,10 +2809,48 @@
                 throw new Error("Brak połączenia z drukarką ZD420");
             }
 
-            showResult("Przekazywanie etykiety wielosztuki " + returnId + "...", "#7c3aed");
+            const knownPackageTotal = Number(retData.package_total) || 1;
+            let packageInfo = {
+                package_index: 1,
+                package_total: knownPackageTotal
+            };
+            // Jednopaczkowa wielosztuka zachowuje szybki druk bez dodatkowego
+            // oczekiwania na backend. Rezerwacja jest potrzebna wyłącznie tam,
+            // gdzie trzeba nadać kolejne numery 1/N, 2/N itd.
+            if (knownPackageTotal > 1) {
+                showResult("Ustalam numer paczki zwrotu " + returnId + "...", "#7c3aed");
+                packageInfo = await sendMultiAction(
+                    "multi_package_prepare",
+                    retData
+                );
+            }
+            if (packageInfo.already_resolved) {
+                throw new Error(
+                    "Zwrot " + returnId + " został już zakończony jako: " +
+                    packageInfo.log_status
+                );
+            }
+
+            const labelOptions = {
+                packageIndex: Number(packageInfo.package_index) || 1,
+                packageTotal: Number(packageInfo.package_total) || 1
+            };
+            const packageSuffix = labelOptions.packageTotal > 1
+                ? " — paczka " + labelOptions.packageIndex + "/" + labelOptions.packageTotal
+                : "";
+            showResult(
+                "Przekazywanie etykiety wielosztuki " + returnId + packageSuffix + "...",
+                "#7c3aed"
+            );
             let timing;
             try {
-                timing = await printLabel("WIELOSZTUKA", returnId, "multi-return", "presort");
+                timing = await printLabel(
+                    "WIELOSZTUKA",
+                    returnId,
+                    "multi-return",
+                    "presort",
+                    labelOptions
+                );
             } catch (error) {
                 addScanToHistory(
                     retData.tracking,
@@ -2709,6 +2867,7 @@
             lastPrintedImage = null;
             lastPrintedKind = "multi-return";
             lastPrintedPrinterRole = "presort";
+            lastPrintedOptions = labelOptions;
 
             showResult(
                 "Etykieta przekazana do drukarki. Zapisuję wielosztukę w logach...",
@@ -2820,6 +2979,7 @@
                 lastPrintedImage = null;
                 lastPrintedKind = "rejected-return";
                 lastPrintedPrinterRole = "presort";
+                lastPrintedOptions = {};
 
                 showResult(
                     "Zwrot " + rejectedReturnId + " odrzucony — wydrukowano etykietę z X",
@@ -2912,6 +3072,7 @@
             lastPrintedImage = finalImage;
             lastPrintedKind = "product";
             lastPrintedPrinterRole = "presort";
+            lastPrintedOptions = {};
 
             showResult(
                 "Przekazano do drukarki: " + cleanCode,
@@ -2935,8 +3096,21 @@
             const session = activeMultiSession;
             if (!session) return;
 
+            if (session.packageTotal > 1 && !session.allPackagesRegistered) {
+                playErrorSound();
+                multiSummaryEl.textContent =
+                    "Brakuje paczek zwrotu " + session.returnId + " (" +
+                    session.registeredPackages + "/" + session.packageTotal + ")";
+                multiSummaryEl.style.color = "#f59e0b";
+                return;
+            }
+
+            startMultiPrintBtn.style.display = "none";
+            deferMultiBtn.style.display = "none";
             retryPrintBtn.style.display = "none";
             retryPrintBtn.disabled = true;
+            acceptBtn.style.display = "block";
+            verifyBtn.style.display = "block";
             acceptBtn.disabled = true;
             verifyBtn.disabled = true;
             multiActions.style.display = "flex";
@@ -2986,6 +3160,7 @@
                 lastPrintedImage = lastItem.imageUrl;
                 lastPrintedKind = "product";
                 lastPrintedPrinterRole = "multi";
+                lastPrintedOptions = {};
                 console.info("[MULTI SECOND STAGE] Pakiet etykiet przekazany", {
                     return_id: session.returnId,
                     labels: remainingItems.length,
@@ -3020,9 +3195,6 @@
             }
 
             const items = parseMultiItems(retData);
-            if (!isPrinterReady("multi")) {
-                throw new Error("Brak połączenia z drukarką ZD411");
-            }
 
             // Dane produktów są już w pamięci przeglądarki. Pokazujemy je od razu,
             // a kontrolę otwartego logu wykonujemy równolegle z ładowaniem zdjęć.
@@ -3033,7 +3205,10 @@
                 items: items,
                 nextPrintIndex: 0,
                 allPrinted: false,
-                rejectionLabelPrinted: false
+                rejectionLabelPrinted: false,
+                packageTotal: Number(retData.package_total) || 1,
+                registeredPackages: 0,
+                allPackagesRegistered: false
             };
             resetMultiWorkspace();
             modeBtn.disabled = true;
@@ -3070,12 +3245,57 @@
                 throw error;
             }
 
+            previewSession.packageTotal = Number(state.package_total) ||
+                Number(retData.package_total) || 1;
+            previewSession.registeredPackages = Number(state.registered_packages) || 0;
+            previewSession.allPackagesRegistered = Boolean(
+                state.all_packages_registered ||
+                previewSession.registeredPackages === previewSession.packageTotal
+            );
             activeMultiSession = previewSession;
             console.info("[MULTI SECOND STAGE] Zwrot gotowy do druku", {
                 return_id: previewSession.returnId,
                 products: items.length,
+                registered_packages: previewSession.registeredPackages,
+                package_total: previewSession.packageTotal,
                 state_ms: roundTiming(monotonicNow() - workflowStartedMs)
             });
+
+            if (activeMultiSession.packageTotal > 1) {
+                multiActions.style.display = "flex";
+                acceptBtn.style.display = "none";
+                verifyBtn.style.display = "none";
+                retryPrintBtn.style.display = "none";
+                deferMultiBtn.style.display = "block";
+                startMultiPrintBtn.style.display = "block";
+                startMultiPrintBtn.disabled = !activeMultiSession.allPackagesRegistered;
+                startMultiPrintBtn.innerHTML = activeMultiSession.allPackagesRegistered
+                    ? "🖨️ Mam wszystkie paczki — drukuj kody"
+                    : "⏳ Brakuje paczek — " + activeMultiSession.registeredPackages +
+                        "/" + activeMultiSession.packageTotal;
+
+                if (activeMultiSession.allPackagesRegistered) {
+                    multiSummaryEl.textContent =
+                        "Zwrot " + activeMultiSession.returnId + " — komplet " +
+                        activeMultiSession.registeredPackages + "/" +
+                        activeMultiSession.packageTotal + " paczek";
+                    multiSummaryEl.style.color = "#10b981";
+                    multiProgressEl.textContent =
+                        items.length + " produktów — potwierdź komplet i wydrukuj kody";
+                } else {
+                    multiSummaryEl.textContent =
+                        "Zwrot " + activeMultiSession.returnId + " — zarejestrowano " +
+                        activeMultiSession.registeredPackages + "/" +
+                        activeMultiSession.packageTotal + " paczek";
+                    multiSummaryEl.style.color = "#f59e0b";
+                    multiProgressEl.textContent =
+                        "Brakuje " +
+                        (activeMultiSession.packageTotal - activeMultiSession.registeredPackages) +
+                        " paczek. Odłóż zwrot i zeskanuj go ponownie później.";
+                }
+                return;
+            }
+
             multiSummaryEl.textContent =
                 "Zwrot " + activeMultiSession.returnId + " — " + items.length + " produktów";
             await continueMultiPrinting();
@@ -3116,6 +3336,7 @@
                     lastPrintedImage = null;
                     lastPrintedKind = "rejected-return";
                     lastPrintedPrinterRole = "presort";
+                    lastPrintedOptions = {};
                     multiProgressEl.textContent =
                         "Etykieta z X przekazana do ZD420 w " +
                         formatPrintDuration(rejectionTiming.total_ms);
@@ -3142,9 +3363,14 @@
                 );
                 const accepted = decision === "accept";
 
-                returnsCache.delete(String(session.retData.tracking || "").toLowerCase());
+                const sessionPackages = Array.isArray(session.retData.packages)
+                    ? session.retData.packages
+                    : [session.retData];
+                sessionPackages.forEach(function (pkg) {
+                    returnsCache.delete(String(pkg.tracking || "").toLowerCase());
+                });
                 returnsById.delete(session.returnId);
-                GM_setValue("stocksell_returns_time", "0");
+                GM_setValue("stocksell_returns_time_v2", "0");
 
                 multiSummaryEl.textContent = accepted
                     ? "✅ Przyjęto zwrot " + session.returnId + " i przeniesiono go w Base"
@@ -3190,6 +3416,26 @@
             }
         }
 
+        function deferActiveMultiReturn() {
+            const session = activeMultiSession;
+            if (!session || decisionBusy || scanBusy || session.allPrinted) return;
+
+            const returnId = session.returnId;
+            const packageProgress = session.registeredPackages + "/" + session.packageTotal;
+            activeMultiSession = null;
+            closeVerificationEditor(false);
+            resetMultiWorkspace();
+            multiSummaryEl.textContent = "📦 Odłożono zwrot " + returnId;
+            multiSummaryEl.style.color = "#7c3aed";
+            multiProgressEl.textContent =
+                "Zarejestrowane paczki: " + packageProgress +
+                ". Zeskanuj numer zwrotu ponownie, gdy będziesz gotowy.";
+            modeBtn.disabled = false;
+            input.disabled = false;
+            input.value = "";
+            setTimeout(function () { input.focus(); }, 100);
+        }
+
         toggleBtn.onclick = function () {
             const isHidden = panel.style.display === "none";
             panel.style.display = isHidden ? "block" : "none";
@@ -3232,6 +3478,26 @@
             } finally {
                 scanBusy = false;
             }
+        };
+
+        startMultiPrintBtn.onclick = async function () {
+            if (!activeMultiSession || scanBusy || decisionBusy) return;
+            scanBusy = true;
+            startMultiPrintBtn.disabled = true;
+            deferMultiBtn.disabled = true;
+            try {
+                await continueMultiPrinting();
+            } finally {
+                scanBusy = false;
+                if (activeMultiSession && !activeMultiSession.allPrinted) {
+                    startMultiPrintBtn.disabled = !activeMultiSession.allPackagesRegistered;
+                    deferMultiBtn.disabled = false;
+                }
+            }
+        };
+
+        deferMultiBtn.onclick = function () {
+            deferActiveMultiReturn();
         };
 
         acceptBtn.onclick = function () {
@@ -3291,7 +3557,8 @@
                     lastPrintedTitle,
                     lastPrintedCode,
                     lastPrintedKind,
-                    lastPrintedPrinterRole
+                    lastPrintedPrinterRole,
+                    lastPrintedOptions
                 );
                 showResult(
                     "Przekazano ponownie do drukarki: " + lastPrintedCode,
@@ -3420,5 +3687,3 @@
     }, 500);
 
 })();
-
-
