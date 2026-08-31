@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BaseLinker Skaner Zwrotów (Zebra)
 // @namespace    stocksell-returns
-// @version      4.4.0
+// @version      4.5.0
 // @match        https://panel.baselinker.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -34,12 +34,18 @@
     const STATUS_RETRY_INTERVAL = 30000;
     const RETURNS_AUTO_REFRESH_INTERVAL = 5 * 60 * 1000;
     const MULTI_ACTION_TIMEOUT = 75000;
-    const MULTI_ACTION_RETRY_DELAYS = Object.freeze([2000, 5000]);
+    // Błędy chwilowe Google Apps Script są ponawiane bez limitu; ostatni
+    // odstęp jest potem używany cyklicznie, bez pytania pracownika.
+    const MULTI_ACTION_RETRY_DELAYS = Object.freeze([2000, 5000, 15000]);
+    const MULTI_REGISTRATION_QUEUE_KEY = "stocksell_multi_registration_queue_v1";
+    const MULTI_REGISTRATION_RETRY_INTERVAL = 15000;
 
     // Transport Zebra Browser Print. Oficjalna biblioteka używa 127.0.0.1.
     const PRINT_BRIDGE_URL = "http://127.0.0.1:9100";
     const PRINT_SOFT_WARNING_MS = 4000;
-    const PRINT_HARD_TIMEOUT_MS = 90000;
+    const PRINT_HARD_TIMEOUT_MS = 20000;
+    // Po ostatnim czasie z listy druk będzie ponawiany co 15 sekund aż do skutku.
+    const PRINT_AUTOMATIC_RETRY_DELAYS = Object.freeze([1500, 4000, 10000, 15000]);
     const PRINT_KEEPALIVE_INTERVAL_MS = 120000;
     const PRINT_UNCERTAIN_STATE_KEY = "stocksell_print_uncertain_v1";
     const PRINTER_ROLES = Object.freeze({
@@ -59,6 +65,7 @@
     let baseStatusEl = null;
     let refreshBtn = null;
     let historyContainer = null;
+    let retryRegistrationBtnEl = null;
     
     // Zmienne do ponownego wydruku
     let lastPrintedCode = null;
@@ -71,6 +78,7 @@
     let recentScans = JSON.parse(GM_getValue("returns_recent_scans_v1", "[]"));
     let currentTheme = GM_getValue("stocksell_theme", "dark");
     let statusSyncInProgress = false;
+    let multiRegistrationSyncInProgress = false;
     let returnsLoading = false;
     let printJobSequence = 0;
     let printerDiscoveryInProgress = false;
@@ -484,7 +492,8 @@
             ...extraData
         };
 
-        for (let attempt = 0; attempt <= MULTI_ACTION_RETRY_DELAYS.length; attempt++) {
+        let attempt = 0;
+        while (true) {
             try {
                 const result = await postReturnsApi(payload, MULTI_ACTION_TIMEOUT);
                 if (result.action !== expectedActions[action]) {
@@ -494,22 +503,136 @@
                 }
                 return result;
             } catch (error) {
-                const canRetry =
-                    attempt < MULTI_ACTION_RETRY_DELAYS.length &&
-                    isTransientMultiApiError(error);
+                const canRetry = isTransientMultiApiError(error);
                 if (!canRetry) throw error;
 
-                const delay = MULTI_ACTION_RETRY_DELAYS[attempt];
+                const delay = MULTI_ACTION_RETRY_DELAYS[
+                    Math.min(attempt, MULTI_ACTION_RETRY_DELAYS.length - 1)
+                ];
+                attempt++;
                 console.warn(
-                    "[MULTI API] Próba " + (attempt + 1) + " nie powiodła się. " +
+                    "[MULTI API] Próba " + attempt + " nie powiodła się. " +
                     "Automatyczne ponowienie za " + delay + " ms:",
                     error
                 );
                 await waitMilliseconds(delay);
             }
         }
+    }
 
-        throw new Error("Nie udało się wykonać operacji wielosztukowej.");
+    function getMultiRegistrationQueue() {
+        const saved = GM_getValue(MULTI_REGISTRATION_QUEUE_KEY, "[]");
+        try {
+            const queue = typeof saved === "string" ? JSON.parse(saved) : saved;
+            return Array.isArray(queue) ? queue : [];
+        } catch (error) {
+            console.error("[MULTI BACKGROUND] Uszkodzona kolejka zapisów:", error);
+            return [];
+        }
+    }
+
+    function saveMultiRegistrationQueue(queue) {
+        GM_setValue(MULTI_REGISTRATION_QUEUE_KEY, JSON.stringify(queue));
+    }
+
+    function multiRegistrationKey(item) {
+        return String(item.return_id || "") + "|" +
+            String(item.tracking || "").trim().toLowerCase();
+    }
+
+    function updateMultiRegistrationQueueUI() {
+        const queueLength = getMultiRegistrationQueue().length;
+        if (retryRegistrationBtnEl) {
+            retryRegistrationBtnEl.style.display = queueLength ? "block" : "none";
+            retryRegistrationBtnEl.disabled = multiRegistrationSyncInProgress;
+            retryRegistrationBtnEl.innerHTML = queueLength
+                ? "🔄 Zapisy wielosztuk w tle: " + queueLength
+                : "🔄 Zapisy wielosztuk w tle";
+        }
+    }
+
+    function enqueueMultiRegistration(retData, packageInfo) {
+        const item = {
+            return_id: String(retData.return_id || retData.return_nr || "").trim(),
+            return_nr: String(retData.return_nr || retData.return_id || "").trim(),
+            tracking: String(retData.tracking || "").trim().toLowerCase(),
+            package_index: Number(packageInfo && packageInfo.package_index) || 1,
+            package_total: Number(packageInfo && packageInfo.package_total) || 1,
+            created_at: new Date().toISOString()
+        };
+        const itemKey = multiRegistrationKey(item);
+        const queue = getMultiRegistrationQueue().filter(function (queued) {
+            return multiRegistrationKey(queued) !== itemKey;
+        });
+        queue.push(item);
+        saveMultiRegistrationQueue(queue);
+        updateMultiRegistrationQueueUI();
+        processMultiRegistrationQueue();
+    }
+
+    async function processMultiRegistrationQueue() {
+        if (multiRegistrationSyncInProgress) return;
+        // Wpis do arkusza nie konkuruje z wysyłaniem etykiet do lokalnej
+        // usługi Zebra. Po opróżnieniu kolejki druku funkcja jest wywoływana
+        // ponownie automatycznie przez worker.
+        if (
+            (activePrintTask && activePrintTask.kind === "print") ||
+            printTransportQueue.some(function (task) { return task.kind === "print"; })
+        ) {
+            updateMultiRegistrationQueueUI();
+            return;
+        }
+        if (!getWebhookSecret()) {
+            updateMultiRegistrationQueueUI();
+            return;
+        }
+
+        multiRegistrationSyncInProgress = true;
+        updateMultiRegistrationQueueUI();
+        try {
+            while (true) {
+                const queue = getMultiRegistrationQueue();
+                if (!queue.length) break;
+                const item = queue[0];
+
+                try {
+                    const result = await sendMultiAction(
+                        "multi_label_printed",
+                        item
+                    );
+                    const itemKey = multiRegistrationKey(item);
+                    const latestQueue = getMultiRegistrationQueue().filter(function (queued) {
+                        return multiRegistrationKey(queued) !== itemKey;
+                    });
+                    saveMultiRegistrationQueue(latestQueue);
+                    console.info("[MULTI BACKGROUND] Zapisano wielosztukę", {
+                        return_id: item.return_id,
+                        tracking: item.tracking,
+                        package_index: result.package_index,
+                        package_total: result.package_total
+                    });
+                    if (baseStatusEl) {
+                        baseStatusEl.innerText =
+                            "✅ Zapisano wielosztukę " + item.return_id + " w tle";
+                    }
+                } catch (error) {
+                    console.warn(
+                        "[MULTI BACKGROUND] Zapis pozostaje w kolejce i zostanie ponowiony:",
+                        item,
+                        error
+                    );
+                    if (baseStatusEl) {
+                        baseStatusEl.innerText =
+                            "🔄 Zapis wielosztuki " + item.return_id +
+                            " oczekuje na automatyczne ponowienie";
+                    }
+                    break;
+                }
+            }
+        } finally {
+            multiRegistrationSyncInProgress = false;
+            updateMultiRegistrationQueueUI();
+        }
     }
 
     //////////////////////////////////////////////////////
@@ -535,6 +658,7 @@
         GM_setValue(WEBHOOK_SECRET_KEY, normalizedSecret);
         if (baseStatusEl) baseStatusEl.innerText = "✅ Integracja Base gotowa";
         flushPendingStatusUpdates(true);
+        processMultiRegistrationQueue();
     }
 
     function getStatusQueue() {
@@ -1060,19 +1184,15 @@
         const uncertain = getUncertainPrintState();
         if (!uncertain) return;
 
-        printTransportBlocked = true;
         console.warn(
-            "[ZEBRA QUEUE] Poprzedni wydruk ma stan niepewny. Sprawdź fizyczną etykietę.",
+            "[ZEBRA QUEUE] Usunięto stary stan niepewnego wydruku. Kolejne zadania będą ponawiane automatycznie.",
             uncertain
         );
+        GM_setValue(PRINT_UNCERTAIN_STATE_KEY, "");
+        printTransportBlocked = false;
         if (printerStatusEl) {
-            const uncertainRole = PRINTER_ROLES[uncertain.printer_role]
-                ? uncertain.printer_role
-                : "presort";
             printerStatusEl.innerText =
-                "⚠️ Sprawdź, czy wyszła etykieta " + uncertain.code +
-                " z " + getPrinterRoleLabel(uncertainRole) +
-                " — kolejka wstrzymana";
+                "🔄 Drukowanie odblokowane — automatyczne ponawianie aktywne";
         }
     }
 
@@ -1328,7 +1448,7 @@
                 updatePrintQueueStatus(
                     "⚠️ Drukarka odpowiada wolno (" +
                     formatPrintDuration(elapsed) +
-                    ") — nie skanuj ponownie"
+                    ") — system ponowi automatycznie"
                 );
 
                 slowTicker = setInterval(function () {
@@ -1336,7 +1456,7 @@
                     updatePrintQueueStatus(
                         "⚠️ Drukarka odpowiada wolno (" +
                         formatPrintDuration(currentElapsed) +
-                        ") — nie skanuj ponownie"
+                        ") — system ponowi automatycznie"
                     );
                 }, 1000);
             }, PRINT_SOFT_WARNING_MS);
@@ -1350,7 +1470,9 @@
                     console.warn("[ZEBRA QUEUE] Nie udało się przerwać zawieszonego żądania", error);
                 }
                 finishError(
-                    "Brak odpowiedzi Zebra Browser Print przez 90 sekund. Stan wydruku jest niepewny.",
+                    "Brak odpowiedzi Zebra Browser Print przez " +
+                    Math.round(PRINT_HARD_TIMEOUT_MS / 1000) +
+                    " sekund. Stan wydruku jest niepewny.",
                     "bridge_hard_timeout",
                     0,
                     task.kind === "print"
@@ -1425,15 +1547,54 @@
         });
     }
 
-    function rejectQueuedPrintTasks(message) {
-        while (printTransportQueue.length) {
-            const queuedTask = printTransportQueue.shift();
-            if (queuedTask.kind === "print") {
-                const error = new Error(message);
-                error.uncertain = true;
-                queuedTask.reject(error);
-            } else {
-                queuedTask.resolve(null);
+    async function waitForPrinterReadyAutomatically(task) {
+        const printerRole = task.printerRole;
+        while (!isPrinterReady(printerRole)) {
+            updatePrintQueueStatus(
+                "🔄 Oczekiwanie na " + getPrinterRoleLabel(printerRole) +
+                " — połączenie jest odnawiane automatycznie"
+            );
+            initPrinter(true);
+            await waitMilliseconds(2000);
+        }
+
+        // Urządzenie może dostać nowy identyfikator po ponownym uruchomieniu
+        // Browser Print, dlatego odświeżamy je tuż przed każdą próbą /write.
+        task.device = getBrowserPrintDevicePayload(printerDevices[printerRole]);
+    }
+
+    async function sendBridgeWriteWithAutomaticRetry(task) {
+        let attempt = 0;
+        while (true) {
+            try {
+                if (task.kind === "print") {
+                    await waitForPrinterReadyAutomatically(task);
+                }
+                return await sendBridgeWrite(task);
+            } catch (error) {
+                const canRetry = task.kind === "print";
+                if (!canRetry) throw error;
+
+                const delay = PRINT_AUTOMATIC_RETRY_DELAYS[
+                    Math.min(attempt, PRINT_AUTOMATIC_RETRY_DELAYS.length - 1)
+                ];
+                attempt++;
+                GM_setValue(PRINT_UNCERTAIN_STATE_KEY, "");
+                printTransportBlocked = false;
+                if (task.printerRole && printerDevices[task.printerRole] !== undefined) {
+                    printerDevices[task.printerRole] = null;
+                }
+                schedulePrinterReconnect(500);
+                console.warn(
+                    "[ZEBRA AUTO RETRY #" + task.id + "] Nieudana próba " + attempt +
+                    ". Automatyczne ponowienie za " + delay + " ms",
+                    error
+                );
+                updatePrintQueueStatus(
+                    "🔄 Etykieta " + task.code + " oczekuje — automatyczna próba " +
+                    (attempt + 1) + " za " + Math.round(delay / 1000) + " s"
+                );
+                await waitMilliseconds(delay);
             }
         }
     }
@@ -1452,7 +1613,7 @@
                 updatePrintQueueStatus();
 
                 try {
-                    const timing = await sendBridgeWrite(task);
+                    const timing = await sendBridgeWriteWithAutomaticRetry(task);
 
                     if (task.kind === "keepalive") {
                         try {
@@ -1469,15 +1630,6 @@
 
                     task.resolve(timing);
                 } catch (error) {
-                    if (task.kind === "print" && error.uncertain) {
-                        printTransportBlocked = true;
-                        if (task.printerRole && printerDevices[task.printerRole] !== undefined) {
-                            printerDevices[task.printerRole] = null;
-                        }
-                        rejectQueuedPrintTasks(
-                            "Kolejka zatrzymana po niepewnym wydruku " + task.code
-                        );
-                    }
                     task.reject(error);
                 } finally {
                     activePrintTask = null;
@@ -1487,6 +1639,12 @@
         } finally {
             printWorkerRunning = false;
             updatePrintQueueStatus();
+            if (!printTransportQueue.length && !activePrintTask) {
+                setTimeout(function () {
+                    flushPendingStatusUpdates(false);
+                    processMultiRegistrationQueue();
+                }, 0);
+            }
         }
     }
 
@@ -1524,20 +1682,6 @@
         const queuedMs = monotonicNow();
         const startedAt = new Date().toISOString();
 
-        if (printTransportBlocked) {
-            const blockedError = new Error(
-                "Najpierw sprawdź poprzednią etykietę o niepewnym stanie i odblokuj kolejkę."
-            );
-            blockedError.uncertain = true;
-            return Promise.reject(blockedError);
-        }
-
-        if (!isPrinterReady(normalizedPrinterRole)) {
-            return Promise.reject(new Error(
-                "Brak połączenia z drukarką " + PRINTER_ROLES[normalizedPrinterRole].model
-            ));
-        }
-
         let zpl;
         const zplStartedMs = monotonicNow();
         try {
@@ -1574,7 +1718,7 @@
             code: task.code,
             label_kind: task.labelKind,
             printer_role: task.printerRole,
-            printer: task.device.name,
+            printer: task.device.name || "oczekiwanie na połączenie",
             queue_length: printTransportQueue.length + 1,
             zpl_ms: roundTiming(task.zplMs)
         });
@@ -1591,20 +1735,6 @@
 
         if (!batchItems.length) {
             return Promise.reject(new Error("Brak etykiet produktów do wydrukowania"));
-        }
-
-        if (printTransportBlocked) {
-            const blockedError = new Error(
-                "Najpierw sprawdź poprzednią etykietę o niepewnym stanie i odblokuj kolejkę."
-            );
-            blockedError.uncertain = true;
-            return Promise.reject(blockedError);
-        }
-
-        if (!isPrinterReady(normalizedPrinterRole)) {
-            return Promise.reject(new Error(
-                "Brak połączenia z drukarką " + PRINTER_ROLES[normalizedPrinterRole].model
-            ));
         }
 
         const zplStartedMs = monotonicNow();
@@ -1638,7 +1768,7 @@
             codes: codes,
             labels: batchItems.length,
             printer_role: task.printerRole,
-            printer: task.device.name,
+            printer: task.device.name || "oczekiwanie na połączenie",
             queue_length: printTransportQueue.length + 1,
             zpl_ms: roundTiming(task.zplMs)
         });
@@ -1997,8 +2127,9 @@
         reprintBtn.style.cssText = "margin-top:12px;width:100%;padding:13px;font-size:16px;background:#3b82f6;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:bold;box-shadow:0 4px 6px rgba(0,0,0,.1);flex-shrink:0;";
 
         const retryRegistrationBtn = document.createElement("button");
-        retryRegistrationBtn.innerHTML = "🔄 Ponów zapis wielosztuki bez drukowania";
+        retryRegistrationBtn.innerHTML = "🔄 Zapisy wielosztuk w tle";
         retryRegistrationBtn.style.cssText = "display:none;margin-top:10px;width:100%;padding:13px;font-size:15px;background:#d97706;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:bold;flex-shrink:0;";
+        retryRegistrationBtnEl = retryRegistrationBtn;
 
         const resultEl = document.createElement("div");
         resultEl.className = "stocksell-result";
@@ -2225,7 +2356,6 @@
         let decisionBusy = false;
         let activeMultiSession = null;
         let verificationEditorRows = [];
-        let pendingMultiRegistration = null;
         let lastAlertType = null;
         let lastAlertColor = null;
 
@@ -2482,8 +2612,7 @@
             leftCol.style.flex = multiMode ? "1 1 100%" : "0 0 40%";
             contentRow.style.gap = multiMode ? "0" : "42px";
             reprintBtn.style.display = multiMode ? "none" : "block";
-            retryRegistrationBtn.style.display =
-                !multiMode && pendingMultiRegistration ? "block" : "none";
+            updateMultiRegistrationQueueUI();
             resultEl.innerHTML = "";
             multiWorkspace.style.display = multiMode ? "flex" : "none";
             if (multiMode) resetMultiWorkspace();
@@ -2717,12 +2846,6 @@
 
         async function reprintMultiItem(item) {
             if (!item || scanBusy || decisionBusy || !activeMultiSession) return;
-            if (!isPrinterReady("multi")) {
-                playErrorSound();
-                item.statusEl.textContent = "❌ Brak ZD411";
-                item.statusEl.style.color = "#ef4444";
-                return;
-            }
 
             scanBusy = true;
             item.reprintBtn.disabled = true;
@@ -2758,45 +2881,6 @@
             }
         }
 
-        async function registerPrintedMulti(retData) {
-            const result = await sendMultiAction("multi_label_printed", retData);
-            pendingMultiRegistration = null;
-            retryRegistrationBtn.style.display = "none";
-            resetDynamicColor();
-
-            if (result.already_resolved) {
-                showResult(
-                    "Etykieta wydrukowana ponownie — zwrot " +
-                    (retData.return_id || retData.return_nr) +
-                    " był już zakończony jako: " + result.log_status,
-                    "#f59e0b"
-                );
-                addScanToHistory(
-                    retData.tracking,
-                    String(retData.return_id || retData.return_nr),
-                    "Ponowna etykieta zakończonej wielosztuki (" + result.log_status + ")",
-                    "multi"
-                );
-                return result;
-            }
-
-            const packageSuffix = Number(result.package_total) > 1
-                ? " — paczka " + result.package_index + "/" + result.package_total
-                : "";
-            showResult(
-                "ODŁÓŻ DO WIELOSZTUK — zwrot " +
-                (retData.return_id || retData.return_nr) + packageSuffix,
-                "#7c3aed"
-            );
-            addScanToHistory(
-                retData.tracking,
-                String(retData.return_id || retData.return_nr),
-                "Wielosztuka – odłożono do drugiego etapu" + packageSuffix,
-                "multi"
-            );
-            return result;
-        }
-
         async function handleFirstStageMulti(retData) {
             const returnId = String(retData.return_id || retData.return_nr || "").trim();
             if (!/^\d+$/.test(returnId)) {
@@ -2805,10 +2889,6 @@
             if (!getWebhookSecret()) {
                 throw new Error("Ustaw WEBHOOK_SECRET w menu Tampermonkey przed drukiem");
             }
-            if (!isPrinterReady("presort")) {
-                throw new Error("Brak połączenia z drukarką ZD420");
-            }
-
             const knownPackageTotal = Number(retData.package_total) || 1;
             let packageInfo = {
                 package_index: 1,
@@ -2842,50 +2922,57 @@
                 "Przekazywanie etykiety wielosztuki " + returnId + packageSuffix + "...",
                 "#7c3aed"
             );
-            let timing;
-            try {
-                timing = await printLabel(
-                    "WIELOSZTUKA",
-                    returnId,
-                    "multi-return",
-                    "presort",
-                    labelOptions
+            const printPromise = printLabel(
+                "WIELOSZTUKA",
+                returnId,
+                "multi-return",
+                "presort",
+                labelOptions
+            );
+
+            showResult(
+                "Etykieta wielosztuki " + returnId + packageSuffix +
+                " jest w kolejce — możesz skanować następną paczkę",
+                "#7c3aed"
+            );
+
+            printPromise.then(function (timing) {
+                lastPrintedCode = returnId;
+                lastPrintedTitle = "WIELOSZTUKA – zwrot " + returnId;
+                lastPrintedImage = null;
+                lastPrintedKind = "multi-return";
+                lastPrintedPrinterRole = "presort";
+                lastPrintedOptions = labelOptions;
+
+                enqueueMultiRegistration(retData, packageInfo);
+                resetDynamicColor();
+                showResult(
+                    "ODŁÓŻ DO WIELOSZTUK — zwrot " + returnId + packageSuffix +
+                    " (zapis w tle)",
+                    "#7c3aed",
+                    printTimingHtml(timing)
                 );
-            } catch (error) {
+                addScanToHistory(
+                    retData.tracking,
+                    returnId,
+                    "Wielosztuka – odłożono do drugiego etapu" + packageSuffix,
+                    "multi"
+                );
+            }).catch(function (error) {
+                playErrorSound();
+                showResult(
+                    "Nie wydrukowano etykiety wielosztuki " + returnId +
+                    " po automatycznych próbach: " + error.message,
+                    getDynamicColor("error"),
+                    printTimingHtml(error.printTiming)
+                );
                 addScanToHistory(
                     retData.tracking,
                     returnId,
                     "Błąd wydruku etykiety wielosztuki: " + error.message,
                     "error"
                 );
-                error.extraHtml = printTimingHtml(error.printTiming);
-                throw error;
-            }
-
-            lastPrintedCode = returnId;
-            lastPrintedTitle = "WIELOSZTUKA – zwrot " + returnId;
-            lastPrintedImage = null;
-            lastPrintedKind = "multi-return";
-            lastPrintedPrinterRole = "presort";
-            lastPrintedOptions = labelOptions;
-
-            showResult(
-                "Etykieta przekazana do drukarki. Zapisuję wielosztukę w logach...",
-                "#7c3aed",
-                printTimingHtml(timing)
-            );
-
-            try {
-                await registerPrintedMulti(retData);
-            } catch (error) {
-                pendingMultiRegistration = retData;
-                retryRegistrationBtn.style.display = "block";
-                showResult(
-                    "Etykieta została przekazana do drukarki, ale nie zapisano logu: " + error.message,
-                    "#ef4444",
-                    "<div style=\"margin-top:8px;color:var(--text-muted);font-size:14px;\">Użyj przycisku ponowienia — bez kolejnego wydruku.</div>"
-                );
-            }
+            });
         }
 
         async function handlePresortScan(trackingInput) {
@@ -2927,40 +3014,45 @@
                     return;
                 }
 
-                if (!isPrinterReady("presort")) {
+                const rejectedPrintPromise = printLabel(
+                    "NIE PRZYJMOWAC",
+                    rejectedReturnId,
+                    "rejected-return",
+                    "presort"
+                );
+                logInBackground(retData.return_nr, trackingInput, "nie");
+                showResult(
+                    "Etykieta z X dla zwrotu " + rejectedReturnId +
+                    " jest w kolejce — możesz skanować następną paczkę",
+                    getDynamicColor("rejected")
+                );
+
+                rejectedPrintPromise.then(function (rejectedTiming) {
+                    lastPrintedCode = rejectedReturnId;
+                    lastPrintedTitle = "NIE PRZYJMOWAC";
+                    lastPrintedImage = null;
+                    lastPrintedKind = "rejected-return";
+                    lastPrintedPrinterRole = "presort";
+                    lastPrintedOptions = {};
+
                     showResult(
-                        "Odrzucono zwrot " + rejectedReturnId +
-                        ", ale brak połączenia z drukarką ZD420.",
-                        getDynamicColor("rejected")
+                        "Zwrot " + rejectedReturnId +
+                        " odrzucony — etykieta z X przekazana do drukarki",
+                        getDynamicColor("rejected"),
+                        printTimingHtml(rejectedTiming)
                     );
                     addScanToHistory(
                         trackingInput,
                         rejectedReturnId,
-                        "Odrzucono – brak drukarki ZD420",
+                        "Odrzucono – etykieta numeru zwrotu z X",
                         "error"
                     );
-                    logInBackground(retData.return_nr, trackingInput, "nie");
-                    return;
-                }
-
-                showResult(
-                    "Odrzucono zwrot " + rejectedReturnId +
-                    " — przekazywanie etykiety z X...",
-                    getDynamicColor("rejected")
-                );
-
-                let rejectedTiming;
-                try {
-                    rejectedTiming = await printLabel(
-                        "NIE PRZYJMOWAC",
-                        rejectedReturnId,
-                        "rejected-return",
-                        "presort"
-                    );
-                } catch (error) {
+                }).catch(function (error) {
+                    playErrorSound();
                     showResult(
                         "Odrzucono zwrot " + rejectedReturnId +
-                        ", ale nie wydrukowano etykiety: " + error.message,
+                        ", ale nie wydrukowano etykiety po automatycznych próbach: " +
+                        error.message,
                         getDynamicColor("error"),
                         printTimingHtml(error.printTiming)
                     );
@@ -2970,29 +3062,7 @@
                         "Odrzucono – błąd etykiety X: " + error.message,
                         "error"
                     );
-                    logInBackground(retData.return_nr, trackingInput, "nie");
-                    return;
-                }
-
-                lastPrintedCode = rejectedReturnId;
-                lastPrintedTitle = "NIE PRZYJMOWAC";
-                lastPrintedImage = null;
-                lastPrintedKind = "rejected-return";
-                lastPrintedPrinterRole = "presort";
-                lastPrintedOptions = {};
-
-                showResult(
-                    "Zwrot " + rejectedReturnId + " odrzucony — wydrukowano etykietę z X",
-                    getDynamicColor("rejected"),
-                    printTimingHtml(rejectedTiming)
-                );
-                addScanToHistory(
-                    trackingInput,
-                    rejectedReturnId,
-                    "Odrzucono – etykieta numeru zwrotu z X",
-                    "error"
-                );
-                logInBackground(retData.return_nr, trackingInput, "nie");
+                });
                 return;
             }
 
@@ -3029,31 +3099,53 @@
             const finalTitle = retData.title || ("Zwrot " + retData.return_nr);
             const finalImage = safeImageUrl(retData.image_url);
 
-            if (!isPrinterReady("presort")) {
-                playErrorSound();
-                showResult("Brak połączenia z drukarką ZD420!", getDynamicColor("error"));
-                addScanToHistory(trackingInput, cleanCode, "Brak drukarki ZD420", "error");
-                logInBackground(retData.return_nr, trackingInput, "tak");
-                return;
-            }
-
             resetDynamicColor();
             const imageHtml = createSingleImageHtml(finalImage);
+            const productPrintPromise = printLabel(
+                finalTitle,
+                cleanCode,
+                "product",
+                "presort"
+            );
             showResult(
-                "Przekazywanie do drukarki: " + cleanCode,
+                "Etykieta " + cleanCode +
+                " jest w kolejce — możesz skanować następną paczkę",
                 "#10b981",
                 "<div style=\"color:var(--text-main);font-size:22px;line-height:1.4;padding:8px 10px;\">" +
                     escapeHtml(finalTitle) +
                 "</div>" + imageHtml
             );
 
-            let timing;
-            try {
-                timing = await printLabel(finalTitle, cleanCode, "product", "presort");
-            } catch (error) {
+            productPrintPromise.then(function (timing) {
+                lastPrintedCode = cleanCode;
+                lastPrintedTitle = finalTitle;
+                lastPrintedImage = finalImage;
+                lastPrintedKind = "product";
+                lastPrintedPrinterRole = "presort";
+                lastPrintedOptions = {};
+
+                showResult(
+                    "Przekazano do drukarki: " + cleanCode,
+                    "#10b981",
+                    "<div style=\"color:var(--text-main);font-size:22px;line-height:1.4;padding:8px 10px;\">" +
+                        escapeHtml(finalTitle) +
+                    "</div>" + printTimingHtml(timing) + imageHtml
+                );
+
+                addScanToHistory(trackingInput, cleanCode, finalTitle, "success");
+                logInBackground(retData.return_nr, trackingInput, "tak");
+
+                if (enqueueStatusUpdate(retData, trackingInput, cleanCode)) {
+                    flushPendingStatusUpdates(true);
+                } else if (baseStatusEl) {
+                    baseStatusEl.innerText =
+                        "❌ Nie ustalono numeru zwrotu do aktualizacji Base";
+                }
+            }).catch(function (error) {
                 playErrorSound();
                 showResult(
-                    error.message,
+                    "Nie wydrukowano etykiety " + cleanCode +
+                    " po automatycznych próbach: " + error.message,
                     getDynamicColor("error"),
                     printTimingHtml(error.printTiming)
                 );
@@ -3064,32 +3156,7 @@
                     "error"
                 );
                 logInBackground(retData.return_nr, trackingInput, "tak");
-                return;
-            }
-
-            lastPrintedCode = cleanCode;
-            lastPrintedTitle = finalTitle;
-            lastPrintedImage = finalImage;
-            lastPrintedKind = "product";
-            lastPrintedPrinterRole = "presort";
-            lastPrintedOptions = {};
-
-            showResult(
-                "Przekazano do drukarki: " + cleanCode,
-                "#10b981",
-                "<div style=\"color:var(--text-main);font-size:22px;line-height:1.4;padding:8px 10px;\">" +
-                    escapeHtml(finalTitle) +
-                "</div>" + printTimingHtml(timing) + imageHtml
-            );
-
-            addScanToHistory(trackingInput, cleanCode, finalTitle, "success");
-            logInBackground(retData.return_nr, trackingInput, "tak");
-
-            if (enqueueStatusUpdate(retData, trackingInput, cleanCode)) {
-                flushPendingStatusUpdates(true);
-            } else if (baseStatusEl) {
-                baseStatusEl.innerText = "❌ Nie ustalono numeru zwrotu do aktualizacji Base";
-            }
+            });
         }
 
         async function continueMultiPrinting() {
@@ -3314,12 +3381,6 @@
             });
             try {
                 if (decision === "verify" && !session.rejectionLabelPrinted) {
-                    if (!isPrinterReady("presort")) {
-                        throw new Error(
-                            "Brak połączenia z drukarką ZD420 — nie wydrukowano etykiety z X."
-                        );
-                    }
-
                     multiSummaryEl.textContent =
                         "Drukowanie etykiety odrzuconego zwrotu " + session.returnId + " z X...";
                     multiSummaryEl.style.color = "#f59e0b";
@@ -3401,7 +3462,8 @@
                 playErrorSound();
                 multiSummaryEl.textContent = "❌ Nie zapisano decyzji: " + error.message;
                 multiSummaryEl.style.color = "#ef4444";
-                multiProgressEl.textContent = "Możesz bezpiecznie nacisnąć ten sam przycisk ponownie.";
+                multiProgressEl.textContent =
+                    "Błędy chwilowe są ponawiane automatycznie. Ten komunikat oznacza błąd wymagający sprawdzenia konfiguracji.";
                 if (decision === "verify") {
                     verificationMessage.textContent =
                         "Nie zapisano weryfikacji: " + (error.message || String(error));
@@ -3451,22 +3513,9 @@
             setMode(!multiMode);
         };
 
-        retryRegistrationBtn.onclick = async function () {
-            if (!pendingMultiRegistration || scanBusy) return;
-            scanBusy = true;
-            retryRegistrationBtn.disabled = true;
-            modeBtn.disabled = true;
-            try {
-                await registerPrintedMulti(pendingMultiRegistration);
-            } catch (error) {
-                showResult("Nadal nie zapisano logu: " + error.message, "#ef4444");
-            } finally {
-                scanBusy = false;
-                retryRegistrationBtn.disabled = false;
-                modeBtn.disabled = false;
-                if (!pendingMultiRegistration) retryRegistrationBtn.style.display = "none";
-                setTimeout(function () { input.focus(); }, 100);
-            }
+        retryRegistrationBtn.onclick = function () {
+            processMultiRegistrationQueue();
+            setTimeout(function () { if (!input.disabled) input.focus(); }, 100);
         };
 
         retryPrintBtn.onclick = async function () {
@@ -3538,16 +3587,6 @@
                 showResult("Brak kodu do ponownego wydruku albo trwa inne zadanie.", getDynamicColor("error"));
                 return;
             }
-            if (!isPrinterReady(lastPrintedPrinterRole)) {
-                playErrorSound();
-                showResult(
-                    "Brak połączenia z drukarką " +
-                    PRINTER_ROLES[lastPrintedPrinterRole].model + "!",
-                    getDynamicColor("error")
-                );
-                return;
-            }
-
             scanBusy = true;
             input.disabled = true;
             modeBtn.disabled = true;
@@ -3655,22 +3694,12 @@
         }
         requestAllPrinterKeepAlives("menu");
     });
-    GM_registerMenuCommand("Drukarka: odblokuj po sprawdzeniu etykiety", () => {
-        const uncertain = getUncertainPrintState();
-        if (!uncertain) {
-            window.alert("Nie ma niepewnego wydruku do odblokowania.");
-            return;
-        }
-
-        const confirmed = window.confirm(
-            "Najpierw sprawdź fizycznie, czy wyszła etykieta " + uncertain.code + ".\n\n" +
-            "OK odblokuje kolejkę. Jeśli etykiety nie ma, po odblokowaniu użyj świadomie ponownego wydruku."
-        );
-        if (confirmed) clearUncertainPrintState(true);
-    });
-
     setInterval(checkUrlVisibility, 500);
     setInterval(() => flushPendingStatusUpdates(false), STATUS_RETRY_INTERVAL);
+    setInterval(
+        () => processMultiRegistrationQueue(),
+        MULTI_REGISTRATION_RETRY_INTERVAL
+    );
     setInterval(() => preloadReturns(true), RETURNS_AUTO_REFRESH_INTERVAL);
     setInterval(() => {
         requestAllPrinterKeepAlives("timer", true);
@@ -3683,6 +3712,8 @@
             preloadProducts(false);
             initPrinter();
             flushPendingStatusUpdates(false);
+            updateMultiRegistrationQueueUI();
+            processMultiRegistrationQueue();
         }
     }, 500);
 
