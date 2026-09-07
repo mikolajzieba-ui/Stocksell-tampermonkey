@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         StockSell - pakiet usprawnień dla pakowaczy
+// @name         StockSell - pakiet usprawnień
 // @namespace    http://tampermonkey.net/
-// @version      1.0.0
-// @description  Opisy Allegro, podsumowanie batchy, lepsze boxy i analiza logów w jednym skrypcie.
+// @version      1.1.3
+// @description  Opisy Allegro, podsumowanie batchy, lepsze boxy, analiza logów i etykieta błędu zamówienia.
 // @match        https://stocksell.io/*
 // @match        https://*.stocksell.io/*
 // @run-at       document-idle
@@ -896,5 +896,403 @@
 
         initLogsPage();
         setInterval(initLogsPage, 1000);
+    })();
+
+    // ---------------------------------------------------------------------
+    // MODUŁ 5: etykieta błędu zamówienia 100 x 150 mm z kodem Code 128
+    // ---------------------------------------------------------------------
+    (function orderErrorLabelModule() {
+        const LABEL_VERSION = '1.1.3';
+        const CODE_128_PATTERNS = [
+            '212222', '222122', '222221', '121223', '121322', '131222',
+            '122213', '122312', '132212', '221213', '221312', '231212',
+            '112232', '122132', '122231', '113222', '123122', '123221',
+            '223211', '221132', '221231', '213212', '223112', '312131',
+            '311222', '321122', '321221', '312212', '322112', '322211',
+            '212123', '212321', '232121', '111323', '131123', '131321',
+            '112313', '132113', '132311', '211313', '231113', '231311',
+            '112133', '112331', '132131', '113123', '113321', '133121',
+            '313121', '211331', '231131', '213113', '213311', '213131',
+            '311123', '311321', '331121', '312113', '312311', '332111',
+            '314111', '221411', '431111', '111224', '111422', '121124',
+            '121421', '141122', '141221', '112214', '112412', '122114',
+            '122411', '142112', '142211', '241211', '221114', '413111',
+            '241112', '134111', '111242', '121142', '121241', '114212',
+            '124112', '124211', '411212', '421112', '421211', '212141',
+            '214121', '412121', '111143', '111341', '131141', '114113',
+            '114311', '411113', '411311', '113141', '114131', '311141',
+            '411131', '211412', '211214', '211232', '2331112'
+        ];
+
+        // Jeden wydruk na okno potwierdzenia; nowe zgłoszenie może mieć ten sam numer.
+        const handledConfirmations = new WeakSet();
+        const earlyReads = new WeakMap();
+
+        function normalizeText(text) {
+            return (text || '')
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .replace(/[łŁ]/g, 'l')
+                .replace(/[\u00AD\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g, '')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .toLowerCase();
+        }
+
+        function confirmationScope(component) {
+            return component.closest('mat-dialog-container, mat-mdc-dialog-container, [role="dialog"]') || component;
+        }
+
+        function readConfirmation(confirmation) {
+            // Typ okna jest sprawdzany przez selektor komponentu przy kliknięciu.
+            // Odczyt numeru nie zależy od dosłownego brzmienia polskiego komunikatu.
+            const copy = confirmation.cloneNode(true);
+            copy.querySelectorAll('[data-ss-label-ui], script, style').forEach(element => element.remove());
+            const rawText = copy.textContent || '';
+            const fields = Array.from(copy.querySelectorAll('.order-number'), field => field.textContent || '');
+            const details = { version: LABEL_VERSION, fields, text: rawText.slice(0, 1600), source: '', orderNumber: '', conflict: false };
+            const fieldNumbers = new Set();
+
+            for (const field of fields) {
+                const value = normalizeText(field).replace(
+                    /^(?:nr\.?|numer(?: zamowienia)?|zamowienie(?: numer)?)\s*:?\s*/, ''
+                ).replace(/^[#(]\s*|\s*\)$/g, '').replace(/\s/g, '');
+                if (/^\d+$/.test(value)) fieldNumbers.add(value);
+            }
+            if (fieldNumbers.size > 1) return { ...details, conflict: true };
+            if (fieldNumbers.size === 1) {
+                return { ...details, orderNumber: fieldNumbers.values().next().value, source: 'pole numeru w potwierdzeniu' };
+            }
+
+            const text = normalizeText(rawText);
+            const matches = [
+                ...text.matchAll(/blad\s+w\s+zamowieniu\s*(?:nr\.?\s*)?:?\s*(\d+)/g),
+                ...text.matchAll(/zamowienie\s+(?:numer|nr\.?)\s*:?\s*(\d+)/g),
+                ...text.matchAll(/zapisz numer zamowienia[^()]{0,200}\(\s*(\d+)\s*\)/g)
+            ];
+            const labeledNumbers = new Set(matches.map(match => match[1]));
+            if (labeledNumbers.size > 1) return { ...details, conflict: true };
+            if (labeledNumbers.size === 1) {
+                return { ...details, orderNumber: labeledNumbers.values().next().value, source: 'treść potwierdzenia' };
+            }
+
+            // W oknie ze zrzutu numer występuje dwa razy. Akceptujemy jeden unikalny
+            // numer z tego okna, nigdy kod produktu ani numer z tła strony.
+            const numbers = new Set(text.match(/\d+/g) || []);
+            if (numbers.size === 1 && /^\d{4,18}$/.test(numbers.values().next().value)) {
+                return { ...details, orderNumber: numbers.values().next().value, source: 'jedyny numer w potwierdzeniu' };
+            }
+            return { ...details, conflict: numbers.size > 1 };
+        }
+
+        function showReadFailure(details) {
+            const notice = showNotice(
+                `Etykieta v${LABEL_VERSION}: ${details.conflict ? 'odczytano różne numery zamówień' : 'nie odczytano numeru zamówienia'}. Rozwiń szczegóły poniżej.`, true
+            );
+            const disclosure = document.createElement('details');
+            disclosure.style.cssText = 'margin-top:10px;font-weight:normal;';
+            const summary = document.createElement('summary');
+            summary.textContent = 'Pokaż szczegóły odczytu';
+            summary.style.cursor = 'pointer';
+            const output = document.createElement('pre');
+            output.style.cssText = 'white-space:pre-wrap;overflow:auto;max-height:240px;user-select:text;font-size:12px;';
+            output.textContent = `Wersja: ${LABEL_VERSION}\nPola numeru: ${JSON.stringify(details.fields)}\nTekst okna:\n${details.text}`;
+            disclosure.append(summary, output);
+            notice.appendChild(disclosure);
+        }
+
+        function updateConfirmationPreviews() {
+            const scopes = new Set(Array.from(document.querySelectorAll(
+                'app-not-correct-confirmation-box, .not-correct-confirmation-box'
+            ), confirmationScope));
+            for (const scope of scopes) {
+                const details = readConfirmation(scope);
+                let preview = scope.querySelector('[data-ss-label-ui="preview"]');
+                if (!preview) {
+                    preview = document.createElement('div');
+                    preview.dataset.ssLabelUi = 'preview';
+                    preview.style.cssText = 'margin:10px 0 0;font:12px Arial,sans-serif;';
+                    const component = scope.querySelector('app-not-correct-confirmation-box, .not-correct-confirmation-box') || scope;
+                    component.appendChild(preview);
+                }
+                const label = `Etykieta v${LABEL_VERSION}: ${details.orderNumber ? `zamówienie ${details.orderNumber}` : 'numer nieodczytany'}`;
+                if (preview.textContent !== label) preview.textContent = label;
+                preview.style.color = details.orderNumber ? '#2e7d32' : '#b71c1c';
+            }
+        }
+
+        function buildCode128Svg(value) {
+            const text = String(value).replace(/[^\x20-\x7E]/g, '');
+            if (!text) return '';
+
+            const values = Array.from(text, character => character.charCodeAt(0) - 32);
+            let checksum = 104;
+            values.forEach((code, index) => {
+                checksum += code * (index + 1);
+            });
+
+            const symbols = [104, ...values, checksum % 103, 106];
+            const quietZone = 10;
+            let x = quietZone;
+            let rectangles = '';
+
+            symbols.forEach(symbol => {
+                const pattern = CODE_128_PATTERNS[symbol];
+                Array.from(pattern, Number).forEach((width, index) => {
+                    if (index % 2 === 0) {
+                        rectangles += `<rect x="${x}" y="0" width="${width}" height="64" fill="#000"/>`;
+                    }
+                    x += width;
+                });
+            });
+
+            const totalWidth = x + quietZone;
+            return `
+                <svg class="barcode" viewBox="0 0 ${totalWidth} 64"
+                     preserveAspectRatio="none" role="img"
+                     aria-label="Kod kreskowy zamówienia ${text}"
+                     xmlns="http://www.w3.org/2000/svg">
+                    <rect width="100%" height="100%" fill="#fff"/>
+                    ${rectangles}
+                </svg>`;
+        }
+
+        function showNotice(message, isError = false, retry = null) {
+            document.getElementById('ss-error-label-notice')?.remove();
+
+            const notice = document.createElement('div');
+            notice.id = 'ss-error-label-notice';
+            notice.dataset.ssLabelUi = 'notice';
+            notice.textContent = message;
+            notice.style.cssText = [
+                'position:fixed',
+                'right:20px',
+                'bottom:40px',
+                'z-index:1000000',
+                'max-width:420px',
+                'padding:12px 16px',
+                'border-radius:6px',
+                'color:#fff',
+                `background:${isError ? '#c62828' : '#2e7d32'}`,
+                'font:600 14px Arial,sans-serif',
+                'box-shadow:0 4px 16px rgba(0,0,0,.3)'
+            ].join(';');
+            if (retry) {
+                const retryButton = document.createElement('button');
+                retryButton.type = 'button';
+                retryButton.textContent = 'Otwórz etykietę';
+                retryButton.style.cssText = 'display:block;margin-top:10px;padding:8px 12px;cursor:pointer;color:#111;background:#fff;border:0;border-radius:4px;font-weight:bold;';
+                retryButton.addEventListener('click', () => {
+                    notice.remove();
+                    retry();
+                });
+                notice.appendChild(retryButton);
+            }
+            document.body.appendChild(notice);
+            setTimeout(() => notice.remove(), retry || isError ? 60000 : 6000);
+            return notice;
+        }
+
+        function preparePrintWindow(orderNumber) {
+            const printWindow = window.open('', '_blank', 'popup=yes,width=700,height=900');
+            if (!printWindow) return null;
+
+            printWindow.document.open();
+            printWindow.document.write(`<!doctype html>
+                <html lang="pl">
+                <head>
+                    <meta charset="utf-8">
+                    <title>Błąd w zamówieniu ${orderNumber}</title>
+                    <style>
+                        @page { size: 100mm 150mm; margin: 0; }
+                        * { box-sizing: border-box; }
+                        html, body {
+                            width: 100mm;
+                            height: 150mm;
+                            margin: 0;
+                            padding: 0;
+                            background: #fff;
+                            color: #000;
+                            font-family: Arial, Helvetica, sans-serif;
+                        }
+                        .label {
+                            width: 100mm;
+                            height: 150mm;
+                            padding: 9mm 7mm;
+                            display: flex;
+                            flex-direction: column;
+                            align-items: center;
+                            justify-content: center;
+                            overflow: hidden;
+                        }
+                        .title {
+                            width: 100%;
+                            margin: 0 0 8mm;
+                            padding: 4mm 2mm;
+                            border: 1.2mm solid #000;
+                            text-align: center;
+                            font-size: 8mm;
+                            font-weight: 900;
+                            line-height: 1.05;
+                            letter-spacing: .2mm;
+                        }
+                        .caption {
+                            margin: 0 0 2mm;
+                            font-size: 5mm;
+                            font-weight: 700;
+                            text-transform: uppercase;
+                        }
+                        .order-number {
+                            max-width: 100%;
+                            margin: 0 0 7mm;
+                            font-size: 13mm;
+                            line-height: 1;
+                            font-weight: 900;
+                            letter-spacing: .4mm;
+                            white-space: nowrap;
+                        }
+                        .barcode {
+                            display: block;
+                            width: 86mm;
+                            height: 42mm;
+                            shape-rendering: crispEdges;
+                        }
+                        .barcode-text {
+                            margin-top: 3mm;
+                            font-family: Consolas, 'Courier New', monospace;
+                            font-size: 6mm;
+                            font-weight: 700;
+                            letter-spacing: 1mm;
+                            white-space: nowrap;
+                        }
+                        .waiting {
+                            position: fixed;
+                            inset: 0;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            padding: 20mm;
+                            text-align: center;
+                            font-size: 7mm;
+                            font-weight: 700;
+                        }
+                        @media print {
+                            .waiting { display: none !important; }
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="waiting">Przygotowywanie etykiety zamówienia ${orderNumber}…</div>
+                </body>
+                </html>`);
+            printWindow.document.close();
+            return printWindow;
+        }
+
+        function renderAndPrint(job) {
+            const printWindow = job.printWindow;
+            if (!printWindow || printWindow.closed) {
+                showNotice('Nie można otworzyć wydruku. Zezwól StockSell na wyskakujące okna.', true);
+                return;
+            }
+
+            printWindow.document.body.innerHTML = `
+                <main class="label">
+                    <h1 class="title">BŁĄD W ZAMÓWIENIU</h1>
+                    <div class="caption">Numer zamówienia</div>
+                    <div class="order-number">${job.orderNumber}</div>
+                    ${buildCode128Svg(job.orderNumber)}
+                    <div class="barcode-text">${job.orderNumber}</div>
+                </main>`;
+
+            const closeAfterPrint = () => {
+                try {
+                    printWindow.close();
+                } catch (_error) {
+                    // Okno mogło zostać zamknięte ręcznie.
+                }
+            };
+            printWindow.addEventListener('afterprint', closeAfterPrint, { once: true });
+
+            setTimeout(() => {
+                if (printWindow.closed) return;
+                printWindow.focus();
+                printWindow.print();
+            }, 300);
+        }
+
+        function printConfirmedOrder(orderNumber) {
+            try {
+                const printWindow = preparePrintWindow(orderNumber);
+                if (!printWindow) {
+                    showNotice(
+                        `Przeglądarka zablokowała etykietę ${orderNumber}. Zezwól StockSell na wyskakujące okna i kliknij poniżej.`,
+                        true,
+                        () => printConfirmedOrder(orderNumber)
+                    );
+                    return;
+                }
+
+                renderAndPrint({ orderNumber, printWindow });
+            } catch (error) {
+                console.warn('[StockSell Suite] Nie udało się przygotować etykiety zgłoszenia.', error);
+                showNotice(
+                    `Nie udało się otworzyć etykiety zamówienia ${orderNumber}.`,
+                    true,
+                    () => printConfirmedOrder(orderNumber)
+                );
+            }
+        }
+
+        // Faza przechwytywania: odczytujemy okno, zanim StockSell usunie je po OK.
+        // Nie blokujemy kliknięcia ani zamknięcia potwierdzenia przez aplikację.
+        document.addEventListener('click', event => {
+            const button = event.target?.closest?.('button');
+            if (!button || button.disabled || button.getAttribute('aria-disabled') === 'true') return;
+            if (normalizeText(button.textContent) !== 'ok') return;
+
+            const component = button.closest('app-not-correct-confirmation-box') ||
+                button.closest('.not-correct-confirmation-box');
+            if (!component) return;
+            const confirmation = confirmationScope(component);
+            if (handledConfirmations.has(confirmation)) return;
+
+            const details = readConfirmation(confirmation);
+            const earlier = earlyReads.get(confirmation);
+            earlyReads.delete(confirmation);
+            const orderNumber = details.orderNumber || (!details.conflict &&
+                earlier && Date.now() - earlier.time < 3000 ? earlier.orderNumber : '');
+            if (!orderNumber) {
+                showReadFailure(details);
+                return;
+            }
+
+            handledConfirmations.add(confirmation);
+            // Otwarcie bezpośrednio podczas kliknięcia OK zachowuje gest użytkownika.
+            printConfirmedOrder(orderNumber);
+        }, true);
+
+        // Odczyt także na początku kliknięcia, przed ewentualną zmianą treści okna.
+        document.addEventListener('pointerdown', event => {
+            const button = event.target?.closest?.('button');
+            if (!button || normalizeText(button.textContent) !== 'ok') return;
+            const component = button.closest('app-not-correct-confirmation-box') || button.closest('.not-correct-confirmation-box');
+            if (!component) return;
+            const scope = confirmationScope(component);
+            const details = readConfirmation(scope);
+            earlyReads.delete(scope);
+            if (details.orderNumber) earlyReads.set(scope, { orderNumber: details.orderNumber, time: Date.now() });
+        }, true);
+
+        let previewScheduled = false;
+        new MutationObserver(() => {
+            if (previewScheduled) return;
+            previewScheduled = true;
+            setTimeout(() => {
+                previewScheduled = false;
+                updateConfirmationPreviews();
+            }, 100);
+        }).observe(document.body, { childList: true, subtree: true, characterData: true });
+        updateConfirmationPreviews();
     })();
 })();
