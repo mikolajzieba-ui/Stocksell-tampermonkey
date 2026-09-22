@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Base.com - Zrzeczenie przesyłki PDF
 // @namespace    stocksell.zrzeczenie
-// @version      1.1.1
+// @version      1.1.2
 // @description  Generuje oświadczenie PDF. Przycisk obok nazwiska i menu: Wygeneruj zrzeczenie.
 // @match        https://panel.baselinker.com/*
 // @match        https://panel.base.com/*
@@ -342,7 +342,7 @@ DEALINGS IN THE FONT SOFTWARE.
     function chooseShipment(order) {
         return new Promise(resolve => {
             const { dialog, add, open, close } = createDialog('Wybierz przesyłkę');
-            add('p', 'Zamówienie ma kilka numerów nadawczych. Wybierz numer i zaznacz produkty należące do tej paczki.');
+            add('p', 'Zamówienie ma kilka numerów nadawczych. Wybierz numer przesyłki. Wszystkie produkty są zaznaczone; odznacz te, które nie należą do tej paczki.');
             add('p', `${order.customerName} · Zamówienie ${order.orderId}`, dialog, 'meta');
             const label = add('label', 'Numer nadawczy', dialog, 'title');
             label.htmlFor = 'shipment';
@@ -359,7 +359,7 @@ DEALINGS IN THE FONT SOFTWARE.
                 const row = add('label', '', list, 'product');
                 const checkbox = add('input', '', row);
                 checkbox.type = 'checkbox';
-                checkbox.checked = false;
+                checkbox.checked = true;
                 add('span', title, row);
                 return checkbox;
             });
