@@ -9,6 +9,8 @@
 // @noframes
 // @grant        GM_registerMenuCommand
 // @require      https://cdn.jsdelivr.net/npm/jspdf@4.2.1/dist/jspdf.umd.min.js#sha256=e6551fcdc32f09d6853b2c5126d18d01d9447e0da618a41a11ebeee0f6c20d54
+// @downloadURL  https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/zrzeczenie-przesylki.user.js
+// @updateURL    https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/zrzeczenie-przesylki.user.js
 // ==/UserScript==
 
 /* Fonty Liberation Sans, bez modyfikacji, SIL Open Font License 1.1.
