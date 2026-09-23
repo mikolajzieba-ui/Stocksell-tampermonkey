@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         StockSell - pakiet usprawnień
 // @namespace    http://tampermonkey.net/
-// @version      1.1.3
-// @description  Opisy Allegro, podsumowanie batchy, lepsze boxy, analiza logów i etykieta błędu zamówienia.
+// @version      1.2.1
+// @description  Opisy Allegro, podsumowanie batchy, lepsze boxy, analiza Pick bez Pack/Match i etykieta błędu zamówienia.
 // @match        https://stocksell.io/*
 // @match        https://*.stocksell.io/*
 // @run-at       document-idle
@@ -714,7 +714,17 @@
             .ss-item-row{padding:6px 0;border-bottom:1px solid #eee}
             .ss-order{color:#d32f2f;font-weight:bold;cursor:pointer}
             .ss-table-link{color:#1976d2;font-weight:bold;cursor:pointer}
-            #ss-manual-trigger{background:#4caf50;margin-bottom:15px;display:block;font-weight:bold}
+            #ss-manual-trigger{background:#4caf50;margin:0;display:block;font-weight:bold}
+            #ss-unmatched-trigger{background:#7b1fa2;margin:0;display:block;font-weight:bold}
+            .ss-log-trigger-row{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;margin-bottom:15px}
+            .ss-log-trigger-hint{color:#555;font-size:13px;line-height:1.4}
+            #ss-unmatched-panel{background:#faf5ff;border:1px solid #e1bee7;border-left:4px solid #7b1fa2;border-radius:4px;padding:15px;margin-bottom:15px}
+            #ss-unmatched-panel .ss-unmatched-hint{font-size:13px;color:#555;margin:0 0 12px}
+            #ss-unmatched-panel .ss-unmatched-warning{color:#9a5300;font-weight:bold}
+            #ss-unmatched-panel .ss-unmatched-product{font-weight:bold;margin-bottom:4px;overflow-wrap:anywhere}
+            #ss-unmatched-panel .ss-unmatched-box{margin-top:4px;font-weight:bold;color:#4a148c}
+            #ss-unmatched-panel .ss-unmatched-more{margin-top:10px}
+            #ss-unmatched-panel .ss-order{background:none;border:0;padding:0;text-decoration:underline;font:inherit;font-weight:bold}
         `);
 
         function openBaseLinker(order) {
@@ -875,9 +885,22 @@
             document.querySelectorAll('.ss-scanned').forEach(element => element.classList.remove('ss-scanned'));
         }
 
+        function insertLogTrigger(table, button, hintText) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'ss-log-trigger-row';
+            const hint = document.createElement('span');
+            hint.id = `${button.id}-hint`;
+            hint.className = 'ss-log-trigger-hint';
+            hint.textContent = hintText;
+            button.setAttribute('aria-describedby', hint.id);
+            wrapper.append(button, hint);
+            table.parentNode.insertBefore(wrapper, table);
+        }
+
         function injectManualTrigger(table) {
             const button = document.createElement('button');
             button.id = 'ss-manual-trigger';
+            button.type = 'button';
             button.className = 'ss-batch-btn';
             button.textContent = '📊 Analizuj załadowane logi';
             button.addEventListener('click', event => {
@@ -885,13 +908,249 @@
                 resetLogsState();
                 analyzeLogs();
             });
-            table.parentNode.insertBefore(button, table);
+            insertLogTrigger(table, button, '- wybierz najpierw logi pick, start pack W i start pack J oraz dzisiejszą datę');
+        }
+
+        function readUnmatchedLogs(table) {
+            const products = new Map();
+            const orderBoxes = new Map();
+            const picksPerOrder = new Map();
+            let loadedRows = 0;
+            let skippedRows = 0;
+            let pickRows = 0;
+            let matchRows = 0;
+            const clean = value => (value || '').replace(/\s+/g, ' ').trim();
+
+            // Czytamy pełną aktualną tabelę przy każdym kliknięciu, także wiersze
+            // wcześniej oznaczone przez analizę niespakowanych (.ss-scanned).
+            for (const row of table.querySelectorAll('mat-row, tr, .mat-row, .mat-mdc-row')) {
+                const type = clean(row.querySelector('.mat-column-type')?.textContent).toLowerCase();
+                if (type !== 'pick' && type !== 'match') continue;
+                loadedRows++;
+                const productText = clean(row.querySelector('.mat-column-product')?.textContent);
+                // Kod produktu w ostatnim nawiasie i numer zamówienia za nim.
+                // Brak numeru zamówienia nie może zostać pomylony z kodem produktu.
+                const identity = productText.match(/\((\d+)\)\s*(?:zamówienie(?:\s+numer)?\s*:?\s*)?(\d+)\s*$/i);
+                // Liczymy wpisy Pick całego zamówienia przed odfiltrowaniem Match.
+                // Dwie sztuki tego samego produktu mogą mieć dwa wpisy Pick.
+                if (type === 'pick' && identity) {
+                    const order = identity[2];
+                    picksPerOrder.set(order, (picksPerOrder.get(order) || 0) + 1);
+                }
+                const batchText = clean(row.querySelector('.batch-column, .mat-column-batch')?.textContent);
+                // Stara analiza dodaje " - numer zamówienia" do kolumny Batch.
+                const batch = batchText.replace(/\s+-\s+\d+\s*$/, '').trim();
+                if (!identity || !batch || /^(?:-|brak)$/i.test(batch)) {
+                    skippedRows++;
+                    continue;
+                }
+
+                const [, code, order] = identity;
+                const batchKey = batch.toLowerCase();
+                const orderKey = JSON.stringify([batchKey, order]);
+                const productKey = JSON.stringify([batchKey, order, code]);
+                const element = clean(row.querySelector('.mat-column-element')?.textContent);
+                const user = clean(row.querySelector('.mat-column-user')?.textContent) || 'Brak danych';
+                if (!products.has(productKey)) {
+                    products.set(productKey, {
+                        batch, batchKey, order, orderKey, code,
+                        name: productText.slice(0, identity.index).trim() || `Produkt ${code}`,
+                        hasPick: false, hasMatch: false,
+                        pickUsers: new Set(), pickSegments: new Set()
+                    });
+                }
+                const product = products.get(productKey);
+                if (type === 'pick') {
+                    pickRows++;
+                    product.hasPick = true;
+                    product.pickUsers.add(user);
+                    if (element) product.pickSegments.add(element);
+                } else {
+                    matchRows++;
+                    product.hasMatch = true;
+                    const boxName = element.split('(')[0].trim();
+                    if (!boxName || /^(?:-|brak)$/i.test(boxName)) continue;
+                    if (!orderBoxes.has(orderKey)) orderBoxes.set(orderKey, new Map());
+                    const boxes = orderBoxes.get(orderKey);
+                    const boxKey = boxName.toLowerCase();
+                    if (!boxes.has(boxKey)) boxes.set(boxKey, new Set());
+                    // Zachowujemy również zapis w nawiasie dokładnie z kolumny.
+                    boxes.get(boxKey).add(element);
+                }
+            }
+
+            const groups = new Map();
+            const excludedSingleOrders = new Set();
+            let missingCount = 0;
+            for (const product of products.values()) {
+                if (!product.hasPick || product.hasMatch) continue;
+                if ((picksPerOrder.get(product.order) || 0) <= 1) {
+                    excludedSingleOrders.add(product.order);
+                    continue;
+                }
+                product.boxes = orderBoxes.get(product.orderKey) || new Map();
+                if (!groups.has(product.batchKey)) groups.set(product.batchKey, { batch: product.batch, items: [] });
+                groups.get(product.batchKey).items.push(product);
+                missingCount++;
+            }
+            return { groups, missingCount, loadedRows, skippedRows, pickRows, matchRows, excludedSingleCount: excludedSingleOrders.size };
+        }
+
+        function buildUnmatchedProduct(item) {
+            const row = document.createElement('div');
+            row.className = 'ss-item-row';
+            const title = document.createElement('div');
+            title.className = 'ss-unmatched-product';
+            title.textContent = `${item.name} (${item.code})`;
+            row.appendChild(title);
+
+            const orderLine = document.createElement('div');
+            orderLine.append(document.createTextNode('Zamówienie: '));
+            const orderButton = document.createElement('button');
+            orderButton.type = 'button';
+            orderButton.className = 'ss-order';
+            orderButton.textContent = item.order;
+            orderButton.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                openBaseLinker(item.order);
+            });
+            orderLine.appendChild(orderButton);
+            row.appendChild(orderLine);
+
+            const pickInfo = document.createElement('div');
+            pickInfo.textContent = `Pick: ${Array.from(item.pickUsers).join(', ')} | Segment Pick: ${Array.from(item.pickSegments).join('; ') || 'Brak danych'}`;
+            row.appendChild(pickInfo);
+            const boxInfo = document.createElement('div');
+            boxInfo.className = 'ss-unmatched-box';
+            if (item.boxes.size === 0) {
+                boxInfo.textContent = 'Box docelowy: Brak danych o boxie — brak wskazania w logach Match tego zamówienia i batcha.';
+            } else {
+                const labels = Array.from(item.boxes.values(), values => Array.from(values).join(' / '));
+                if (item.boxes.size === 1) {
+                    boxInfo.textContent = `Box docelowy: ${labels[0]} — na podstawie Match innego produktu z tego zamówienia.`;
+                } else {
+                    boxInfo.classList.add('ss-unmatched-warning');
+                    boxInfo.textContent = `Różne boxy w logach Match: ${labels.join('; ')} — sprawdź ręcznie.`;
+                }
+            }
+            row.appendChild(boxInfo);
+            return row;
+        }
+
+        function renderUnmatchedPanel(table, result) {
+            let panel = document.getElementById('ss-unmatched-panel');
+            if (!panel) {
+                panel = document.createElement('div');
+                panel.id = 'ss-unmatched-panel';
+            }
+            table.parentNode.insertBefore(panel, table);
+            panel.replaceChildren();
+            const title = document.createElement('div');
+            title.className = 'ss-panel-title';
+            title.textContent = `Produkty niezmatchowane — Pick bez Match (${result.missingCount})`;
+            panel.appendChild(title);
+            const hint = document.createElement('p');
+            hint.className = 'ss-unmatched-hint';
+            hint.textContent = 'Analiza obejmuje tylko załadowane logi. Pomijane są zamówienia z jednym wpisem Pick. Box ustalany jest z Match tego samego zamówienia i batcha.';
+            panel.appendChild(hint);
+            if (result.excludedSingleCount) {
+                const excluded = document.createElement('p');
+                excluded.className = 'ss-unmatched-hint';
+                excluded.textContent = `Pominięte zamówienia z jednym wpisem Pick: ${result.excludedSingleCount}.`;
+                panel.appendChild(excluded);
+            }
+            if (result.skippedRows) {
+                const warning = document.createElement('p');
+                warning.className = 'ss-unmatched-warning';
+                warning.textContent = `Pominięto ${result.skippedRows} wpisów Pick/Match: brak pełnego kodu produktu, numeru zamówienia lub batcha.`;
+                panel.appendChild(warning);
+            }
+            if (result.pickRows && !result.matchRows) {
+                const warning = document.createElement('p');
+                warning.className = 'ss-unmatched-warning';
+                warning.textContent = 'W załadowanej tabeli nie znaleziono odczytywalnych wpisów Match. Sprawdź filtry zdarzeń i zakres dat.';
+                panel.appendChild(warning);
+            }
+            if (!result.groups.size) {
+                const empty = document.createElement('p');
+                empty.textContent = result.pickRows
+                    ? 'W załadowanych logach nie znaleziono produktów Pick bez Match w zamówieniach z co najmniej dwoma wpisami Pick.'
+                    : 'Brak odczytywalnych logów Pick. Załaduj właściwe logi i uruchom analizę ponownie.';
+                panel.appendChild(empty);
+                return;
+            }
+
+            const buttonWrapper = document.createElement('div');
+            buttonWrapper.className = 'ss-batch-buttons';
+            panel.appendChild(buttonWrapper);
+            const groups = Array.from(result.groups.values()).sort((a, b) =>
+                a.batch.localeCompare(b.batch, 'pl', { numeric: true }));
+            for (const group of groups) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'ss-batch-btn';
+                button.textContent = `${group.batch} (${group.items.length})`;
+                button.setAttribute('aria-expanded', 'false');
+                buttonWrapper.appendChild(button);
+                const content = document.createElement('div');
+                content.className = 'ss-batch-content';
+                content.id = `ss-unmatched-list-${buttonWrapper.children.length}`;
+                button.setAttribute('aria-controls', content.id);
+                panel.appendChild(content);
+
+                // Każdy batch można rozwinąć. Długie listy dokładamy po 100 pozycji.
+                let renderedCount = 0;
+                const more = document.createElement('button');
+                more.type = 'button';
+                more.className = 'ss-batch-btn ss-unmatched-more';
+                const appendNextPage = () => {
+                    more.remove();
+                    const fragment = document.createDocumentFragment();
+                    const end = Math.min(renderedCount + 100, group.items.length);
+                    for (; renderedCount < end; renderedCount++) fragment.appendChild(buildUnmatchedProduct(group.items[renderedCount]));
+                    content.appendChild(fragment);
+                    if (renderedCount < group.items.length) {
+                        more.textContent = `Pokaż kolejne ${Math.min(100, group.items.length - renderedCount)} (pozostało ${group.items.length - renderedCount})`;
+                        content.appendChild(more);
+                    }
+                };
+                more.addEventListener('click', event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    appendNextPage();
+                });
+                button.addEventListener('click', event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (!renderedCount) appendNextPage();
+                    const isOpen = content.style.display === 'block';
+                    content.style.display = isOpen ? 'none' : 'block';
+                    button.classList.toggle('active', !isOpen);
+                    button.setAttribute('aria-expanded', String(!isOpen));
+                });
+            }
+        }
+
+        function injectUnmatchedTrigger(table) {
+            const button = document.createElement('button');
+            button.id = 'ss-unmatched-trigger';
+            button.type = 'button';
+            button.className = 'ss-batch-btn';
+            button.textContent = '🔎 Analizuj niezmatchowane';
+            button.addEventListener('click', event => {
+                event.preventDefault();
+                const currentTable = document.querySelector(SELECTORS.logsTable);
+                if (currentTable) renderUnmatchedPanel(currentTable, readUnmatchedLogs(currentTable));
+            });
+            insertLogTrigger(table, button, '- wybierz najpierw logi pick, match, start pack W i start pack J oraz dzisiejszą datę');
         }
 
         function initLogsPage() {
             if (!isLogsPage()) return;
             const table = document.querySelector(SELECTORS.logsTable);
             if (table && !document.getElementById('ss-manual-trigger')) injectManualTrigger(table);
+            if (table && !document.getElementById('ss-unmatched-trigger')) injectUnmatchedTrigger(table);
         }
 
         initLogsPage();
@@ -902,7 +1161,7 @@
     // MODUŁ 5: etykieta błędu zamówienia 100 x 150 mm z kodem Code 128
     // ---------------------------------------------------------------------
     (function orderErrorLabelModule() {
-        const LABEL_VERSION = '1.1.3';
+        const LABEL_VERSION = '1.2.1';
         const CODE_128_PATTERNS = [
             '212222', '222122', '222221', '121223', '121322', '131222',
             '122213', '122312', '132212', '221213', '221312', '231212',
