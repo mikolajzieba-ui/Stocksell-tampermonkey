@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         StockSell - pakiet usprawnień
 // @namespace    http://tampermonkey.net/
-// @version      1.2.1
-// @description  Opisy Allegro, podsumowanie batchy, lepsze boxy, analiza Pick bez Pack/Match i etykieta błędu zamówienia.
+// @version      1.3.1
+// @description  Opisy Allegro, podsumowanie batchy, lepsze boxy, analiza Pick bez Pack/Match, etykiety błędów i druk pełnych miejsc magazynowych z ofert.
 // @match        https://stocksell.io/*
 // @match        https://*.stocksell.io/*
 // @run-at       document-idle
@@ -696,7 +696,141 @@
     })();
 
     // ---------------------------------------------------------------------
-    // MODUL 4: reczna analiza zaladowanych logow
+    // MODUL 4: drukowanie pelnych miejsc magazynowych z ofert
+    // ---------------------------------------------------------------------
+    (function offerLocationsPrintModule() {
+        const buttonSelector = '[data-ss-offer-locations-print]';
+        const menuSelector = '.mat-menu-panel, .mat-mdc-menu-panel';
+        const ignoredTextSelector = `${buttonSelector}, .inline-print-btn, .print-zebra-btn, mat-icon, .mat-icon, .material-icons, .material-icons-outlined, svg, script, style`;
+        const locationCollator = new Intl.Collator('pl', { numeric: true, sensitivity: 'base' });
+
+        function isOffersPage() {
+            return /^\/offers(?:\/|$)/.test(location.pathname);
+        }
+
+        // Odczyt samych nazw: bez ikon kopiowania i bez sklejania osobnych wierszy.
+        function locationText(node) {
+            if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+            if (node.nodeType !== Node.ELEMENT_NODE || node.matches(ignoredTextSelector)) return ' ';
+            const display = getComputedStyle(node).display;
+            if (display === 'none' || node.hidden) return ' ';
+            if (node.tagName === 'BR') return '\n';
+            const text = Array.from(node.childNodes, locationText).join('');
+            return /^(block|flex|grid|table-row|table-cell|list-item)$/.test(display) ? `\n${text}\n` : text;
+        }
+
+        function readLocations(container) {
+            const text = locationText(container).replace(/\bcontent_copy\b/g, ' ');
+            // Podkreslenia, kolejne czlony i myslniki sa czescia segmentu.
+            const matches = text.match(/[\p{L}\p{N}_.-]+\s*\/\s*[\p{L}\p{N}_.-]+/gu) || [];
+            return matches.filter(value => /\p{L}/u.test(value))
+                .map(value => value.replace(/\s*\/\s*/, ' / '));
+        }
+
+        function readMenuLocations(panel) {
+            return Array.from(panel.querySelectorAll('.store-menu-item')).flatMap(readLocations);
+        }
+
+        function printLocations(locations) {
+            if (!locations.length) return;
+            const iframe = document.createElement('iframe');
+            iframe.title = 'Lista miejsc magazynowych do wydruku';
+            iframe.className = 'ss-offer-locations-print-frame';
+            // Ramka musi byc renderowana, aby przegladarka mogla ja wydrukowac.
+            iframe.style.cssText = 'position:fixed;left:-10000px;top:0;width:100mm;height:150mm;border:0;';
+            document.body.appendChild(iframe);
+            const printWindow = iframe.contentWindow;
+            const doc = printWindow.document;
+            doc.open();
+            doc.write(`<!doctype html><html lang="pl"><head><meta charset="utf-8"><title>Drukuj miejsca magazynowe</title><style>
+                @page { size:100mm 150mm; margin:4mm; }
+                * { box-sizing:border-box; }
+                body { font-family:Arial,sans-serif; margin:0; color:#000; background:#fff; }
+                h1 { margin:0 0 3mm; padding-bottom:2mm; border-bottom:2px solid #000; font-size:22px; text-transform:uppercase; }
+                ul { list-style:none; padding:0; margin:0; }
+                li { margin-bottom:2mm; font-size:20px; line-height:1.25; font-weight:bold; overflow-wrap:anywhere; break-inside:avoid; }
+            </style></head><body><h1>Lista lokacji</h1><ul></ul></body></html>`);
+            doc.close();
+            const list = doc.querySelector('ul');
+            // Sortujemy pelne nazwy tylko na wydruku, z naturalna kolejnoscia liczb.
+            for (const location of [...locations].sort(locationCollator.compare)) {
+                const item = doc.createElement('li');
+                item.textContent = location;
+                list.appendChild(item);
+            }
+
+            const cleanup = () => iframe.remove();
+            // Nie usuwamy ramki po sekundzie: okno druku moze pozostawac otwarte.
+            printWindow.addEventListener('afterprint', () => setTimeout(cleanup, 0), { once: true });
+            setTimeout(() => {
+                try {
+                    printWindow.focus();
+                    printWindow.print();
+                } catch (error) {
+                    cleanup();
+                    console.error('[StockSell] Nie udalo sie otworzyc wydruku miejsc magazynowych.', error);
+                    alert('Nie udało się otworzyć okna drukowania miejsc magazynowych. Spróbuj ponownie.');
+                }
+            }, 200);
+        }
+
+        function addPrintButton(container, menu) {
+            const existing = container.querySelector(buttonSelector);
+            const locations = menu ? readMenuLocations(container) : readLocations(container);
+            if (!locations.length) {
+                existing?.remove();
+                return;
+            }
+            // Zastepuje tylko przyciski druku z zalaczonego starego skryptu.
+            // Jego osobny panel spisywania segmentow w logach pozostaje niezalezny.
+            const legacyClass = menu ? 'print-zebra-btn' : 'inline-print-btn';
+            container.querySelectorAll(`.${legacyClass}`).forEach(button => {
+                if (!button.matches(buttonSelector)) button.remove();
+            });
+            if (existing) return;
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = legacyClass;
+            button.dataset.ssOfferLocationsPrint = menu ? 'menu' : 'inline';
+            button.textContent = menu ? '🖨️ Drukuj listę miejsc' : '🖨️';
+            button.title = 'Drukuj pełne miejsca magazynowe';
+            button.setAttribute('aria-label', menu ? 'Drukuj listę miejsc magazynowych' : 'Drukuj miejsca magazynowe');
+            button.style.cssText = menu
+                ? 'display:block;width:calc(100% - 16px);margin:8px;padding:8px;background:#2b2d30;color:#fff;border:1px solid #555;border-radius:4px;cursor:pointer;font-weight:bold;'
+                : 'display:inline-block;margin-left:8px;padding:2px 4px;background:#e0e0e0;color:#222;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:16px;';
+            button.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (!isOffersPage()) return;
+                // Angular moze podmienic dane wewnatrz tej samej komorki.
+                printLocations(menu ? readMenuLocations(container) : readLocations(container));
+            });
+            if (menu) {
+                const content = container.querySelector('.mat-menu-content, .mat-mdc-menu-content') || container;
+                content.prepend(button);
+            } else {
+                container.appendChild(button);
+            }
+        }
+
+        function updatePrintButtons() {
+            if (!isOffersPage()) {
+                document.querySelectorAll(buttonSelector).forEach(button => button.remove());
+                return;
+            }
+            document.querySelectorAll(menuSelector).forEach(panel => addPrintButton(panel, true));
+            document.querySelectorAll('mat-cell, td, .mat-mdc-cell').forEach(cell => {
+                if (!cell.closest(menuSelector)) addPrintButton(cell, false);
+            });
+        }
+
+        updatePrintButtons();
+        // Obejmuje wymiane tabeli, stronicowanie i przejscia SPA do/z /offers.
+        setInterval(updatePrintButtons, 750);
+    })();
+
+    // ---------------------------------------------------------------------
+    // MODUL 5: reczna analiza zaladowanych logow
     // ---------------------------------------------------------------------
     (function logsModule() {
         const productCache = {};
@@ -1158,10 +1292,10 @@
     })();
 
     // ---------------------------------------------------------------------
-    // MODUŁ 5: etykieta błędu zamówienia 100 x 150 mm z kodem Code 128
+    // MODUŁ 6: etykieta błędu zamówienia 100 x 150 mm z kodem Code 128
     // ---------------------------------------------------------------------
     (function orderErrorLabelModule() {
-        const LABEL_VERSION = '1.2.1';
+        const LABEL_VERSION = '1.3.1';
         const CODE_128_PATTERNS = [
             '212222', '222122', '222221', '121223', '121322', '131222',
             '122213', '122312', '132212', '221213', '221312', '231212',
