@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StockSell - pakiet usprawnień
 // @namespace    http://tampermonkey.net/
-// @version      1.3.1
+// @version      1.3.3
 // @description  Opisy Allegro, podsumowanie batchy, lepsze boxy, analiza Pick bez Pack/Match, etykiety błędów i druk pełnych miejsc magazynowych z ofert.
 // @match        https://stocksell.io/*
 // @match        https://*.stocksell.io/*
@@ -855,7 +855,7 @@
             #ss-unmatched-panel{background:#faf5ff;border:1px solid #e1bee7;border-left:4px solid #7b1fa2;border-radius:4px;padding:15px;margin-bottom:15px}
             #ss-unmatched-panel .ss-unmatched-hint{font-size:13px;color:#555;margin:0 0 12px}
             #ss-unmatched-panel .ss-unmatched-warning{color:#9a5300;font-weight:bold}
-            #ss-unmatched-panel .ss-unmatched-product{font-weight:bold;margin-bottom:4px;overflow-wrap:anywhere}
+            #ss-unpacked-panel .ss-unpacked-product,#ss-unmatched-panel .ss-unmatched-product{display:inline;font-weight:bold;overflow-wrap:anywhere}
             #ss-unmatched-panel .ss-unmatched-box{margin-top:4px;font-weight:bold;color:#4a148c}
             #ss-unmatched-panel .ss-unmatched-more{margin-top:10px}
             #ss-unmatched-panel .ss-order{background:none;border:0;padding:0;text-decoration:underline;font:inherit;font-weight:bold}
@@ -868,6 +868,11 @@
         function getLastNumber(text) {
             const matches = text.match(/\d+/g);
             return matches ? matches[matches.length - 1] : '';
+        }
+
+        function getLogProductIdentity(text) {
+            // Ostatni nawias przed numerem zamowienia; nawiasy w tytule pozostaja czescia nazwy.
+            return text.match(/\((\d+)\)\s*(?:zamówienie(?:\s+numer)?\s*:?\s*)?(\d+)\s*$/i);
         }
 
         function buildBatchContent(batch, items, content) {
@@ -884,6 +889,10 @@
                 order.textContent = item.order;
                 order.addEventListener('click', () => openBaseLinker(item.order));
                 row.appendChild(order);
+                const title = document.createElement('span');
+                title.className = 'ss-unpacked-product';
+                title.textContent = item.name || 'Brak tytułu produktu';
+                row.append(document.createTextNode(' | '), title);
                 fragment.appendChild(row);
             });
 
@@ -973,10 +982,12 @@
                 }
 
                 const type = typeColumn.textContent.trim().toLowerCase();
-                const productText = productColumn.textContent.trim();
-                const order = getLastNumber(productText);
-                const codeMatch = productText.match(/\((\d+)\)/);
+                const productText = productColumn.textContent.replace(/\s+/g, ' ').trim();
+                const identity = getLogProductIdentity(productText);
+                const order = identity ? identity[2] : getLastNumber(productText);
+                const codeMatch = identity || productText.match(/\((\d+)\)/);
                 const code = codeMatch ? codeMatch[1] : 'BRAK';
+                const name = codeMatch ? productText.slice(0, codeMatch.index).trim() : '';
                 const batch = batchColumn.textContent.trim().split('-')[0].trim();
                 const id = `${order}_${code}`;
 
@@ -987,11 +998,13 @@
                         batch,
                         order,
                         code,
+                        name,
                         user: userColumn ? userColumn.textContent.trim() : 'System',
                         segment: elementColumn ? elementColumn.textContent.split('(')[0].trim() : 'Brak'
                     };
                 }
 
+                if (!productCache[id].name && name) productCache[id].name = name;
                 if (type === 'pick') productCache[id].hasPick = true;
                 if (type.includes('start pack')) productCache[id].hasPack = true;
 
@@ -1064,7 +1077,7 @@
                 const productText = clean(row.querySelector('.mat-column-product')?.textContent);
                 // Kod produktu w ostatnim nawiasie i numer zamówienia za nim.
                 // Brak numeru zamówienia nie może zostać pomylony z kodem produktu.
-                const identity = productText.match(/\((\d+)\)\s*(?:zamówienie(?:\s+numer)?\s*:?\s*)?(\d+)\s*$/i);
+                const identity = getLogProductIdentity(productText);
                 // Liczymy wpisy Pick całego zamówienia przed odfiltrowaniem Match.
                 // Dwie sztuki tego samego produktu mogą mieć dwa wpisy Pick.
                 if (type === 'pick' && identity) {
@@ -1133,11 +1146,6 @@
         function buildUnmatchedProduct(item) {
             const row = document.createElement('div');
             row.className = 'ss-item-row';
-            const title = document.createElement('div');
-            title.className = 'ss-unmatched-product';
-            title.textContent = `${item.name} (${item.code})`;
-            row.appendChild(title);
-
             const orderLine = document.createElement('div');
             orderLine.append(document.createTextNode('Zamówienie: '));
             const orderButton = document.createElement('button');
@@ -1153,7 +1161,11 @@
             row.appendChild(orderLine);
 
             const pickInfo = document.createElement('div');
-            pickInfo.textContent = `Pick: ${Array.from(item.pickUsers).join(', ')} | Segment Pick: ${Array.from(item.pickSegments).join('; ') || 'Brak danych'}`;
+            pickInfo.textContent = `Pick: ${Array.from(item.pickUsers).join(', ')} | Segment Pick: ${Array.from(item.pickSegments).join('; ') || 'Brak danych'} | `;
+            const title = document.createElement('span');
+            title.className = 'ss-unmatched-product';
+            title.textContent = `${item.name} (${item.code})`;
+            pickInfo.appendChild(title);
             row.appendChild(pickInfo);
             const boxInfo = document.createElement('div');
             boxInfo.className = 'ss-unmatched-box';
@@ -1295,7 +1307,7 @@
     // MODUŁ 6: etykieta błędu zamówienia 100 x 150 mm z kodem Code 128
     // ---------------------------------------------------------------------
     (function orderErrorLabelModule() {
-        const LABEL_VERSION = '1.3.1';
+        const LABEL_VERSION = '1.3.3';
         const CODE_128_PATTERNS = [
             '212222', '222122', '222221', '121223', '121322', '131222',
             '122213', '122312', '132212', '221213', '221312', '231212',
