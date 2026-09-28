@@ -1,13 +1,18 @@
 // ==UserScript==
 // @name         Base.com - Zrzeczenie przesyłki PDF
 // @namespace    stocksell.zrzeczenie
-// @version      1.1.2
-// @description  Generuje oświadczenie PDF. Przycisk obok nazwiska i menu: Wygeneruj zrzeczenie.
+// @version      1.3.0
+// @description  Zrzeczenie PDF oraz kalkulator rabatów z zapisem do Google Sheets.
 // @match        https://panel.baselinker.com/*
 // @match        https://panel.base.com/*
 // @run-at       document-idle
 // @noframes
 // @grant        GM_registerMenuCommand
+// @grant        GM_xmlhttpRequest
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @connect      script.google.com
+// @connect      script.googleusercontent.com
 // @require      https://cdn.jsdelivr.net/npm/jspdf@4.2.1/dist/jspdf.umd.min.js#sha256=e6551fcdc32f09d6853b2c5126d18d01d9447e0da618a41a11ebeee0f6c20d54
 // @downloadURL  https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/zrzeczenie-przesylki.user.js
 // @updateURL    https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/zrzeczenie-przesylki.user.js
@@ -42,7 +47,7 @@ however, cannot be released under any other type of license.  The
 requirement for fonts to remain under this license does not apply to
 any document created using the fonts or their derivatives.
 
- 
+
 
 DEFINITIONS
 "Font Software" refers to the set of files released by the Copyright
@@ -99,11 +104,11 @@ Software, subject to the following conditions:
    Software.
 
 
- 
+
 TERMINATION
 This license becomes null and void if any of the above conditions are not met.
 
- 
+
 
 DISCLAIMER
 THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
@@ -142,33 +147,6 @@ DEALINGS IN THE FONT SOFTWARE.
         const label = busy ? 'Generowanie…' : 'Wygeneruj zrzeczenie';
         if (button.textContent !== label) button.textContent = label;
         button.setAttribute('aria-busy', String(busy));
-    }
-
-    function syncPageButton() {
-        const root = document.querySelector('#panel2');
-        const orderId = location.hash.match(/^#order:(\d+)(?:\b|$)/)?.[1];
-        const header = visible(root) && findHeader(root);
-        const customer = header && findCustomer(header);
-        let button = document.getElementById(BUTTON_ID);
-        if (!orderId || !header || headerOrderId(header) !== orderId || !customer) {
-            button?.remove();
-            return;
-        }
-        if (!button) {
-            button = document.createElement('button');
-            button.id = BUTTON_ID;
-            button.type = 'button';
-            button.className = 'btn btn-sm btn-primary';
-            button.style.cssText = 'display:inline-block;margin-left:18px;vertical-align:middle;padding:7px 13px;border:1px solid #0078d4;border-radius:18px;background:#0078d4;color:#fff;font:600 12px/1.3 Arial,sans-serif;cursor:pointer;white-space:nowrap;';
-            button.addEventListener('click', event => {
-                event.preventDefault();
-                event.stopPropagation();
-                void generate();
-            });
-        }
-        // Sąsiad elementu z nazwiskiem, aby przycisk nie trafił do danych klienta.
-        if (customer.nextElementSibling !== button) customer.after(button);
-        updateButtonState(button);
     }
 
     function installPageButton() {
@@ -551,7 +529,7 @@ DEALINGS IN THE FONT SOFTWARE.
         setTimeout(() => URL.revokeObjectURL(url), 60000);
     }
 
-    async function generate() {
+    async function generateOrder() {
         if (busy) return;
         busy = true;
         updateButtonState();
@@ -574,7 +552,661 @@ DEALINGS IN THE FONT SOFTWARE.
         }
     }
 
+    // Rozszerzenie PDF na widok zwrotu. Dokument nadal korzysta z danych
+    // powiązanego zamówienia: jego płatności oraz przesyłki, nie kwoty zwróconej.
+    const PDF_CONTINUATION_KEY = 'stocksell-zrzeczenie-from-return-v1';
+    const PDF_CONTINUATION_MS = 30000;
+
+    function pdfPage() {
+        const match = location.hash.match(/^#(order|return):(\d+)(?:\b|$)/);
+        const root = document.querySelector('#panel2');
+        const header = visible(root) && findHeader(root);
+        if (!match || !header) return null;
+        const label = match[1] === 'return' ? /\bZwrot\s*#?\s*(\d+)/iu : /\bZamówienie\s*#?\s*(\d+)/iu;
+        if (clean(header.innerText).match(label)?.[1] !== match[2]) return null;
+        return { kind: match[1], id: match[2], root, header };
+    }
+
+    function syncPageButton() {
+        const page = pdfPage();
+        const customer = page && findCustomer(page.header);
+        let button = document.getElementById(BUTTON_ID);
+        if (!page || !customer) { button?.remove(); return; }
+        if (!button) {
+            button = document.createElement('button');
+            button.id = BUTTON_ID;
+            button.type = 'button';
+            button.className = 'btn btn-sm btn-primary';
+            button.style.cssText = 'display:inline-block;margin-left:18px;vertical-align:middle;padding:7px 13px;border:1px solid #0078d4;border-radius:18px;background:#0078d4;color:#fff;font:600 12px/1.3 Arial,sans-serif;cursor:pointer;white-space:nowrap;';
+            button.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                void generate();
+            });
+        }
+        const title = page.kind === 'return'
+            ? 'Otwórz powiązane zamówienie i wygeneruj zrzeczenie na podstawie jego płatności oraz przesyłki.'
+            : 'Wygeneruj zrzeczenie przesyłki PDF.';
+        if (button.title !== title) button.title = title;
+        // Wspólna kolejność obu modułów: nazwisko → PDF → kalkulator.
+        if (customer.nextElementSibling !== button) customer.after(button);
+        updateButtonState(button);
+    }
+
+    function linkedOrderFromReturn() {
+        const page = pdfPage();
+        if (page?.kind !== 'return') throw new Error('Poczekaj na załadowanie szczegółów zwrotu.');
+        if (visible(document.querySelector('#panel_loading'))) throw new Error('Poczekaj na zakończenie ładowania zwrotu.');
+        validateTableOrder(page.root, '#table_return_items_ajax_file', page.id);
+        const candidates = [];
+        for (const row of [...page.root.querySelectorAll('tr')].filter(visible)) {
+            const cells = [...row.children].filter(cell => cell.matches('td, th'));
+            if (cells.length < 2 || !/^Zamówienie\s*:$/iu.test(clean(cells[0].innerText))) continue;
+            const value = cells[1];
+            if (!visible(value)) continue;
+            const links = [...value.querySelectorAll('a')].filter(visible);
+            const visibleId = clean(value.innerText).match(/^#?\s*(\d+)\s*$/)?.[1];
+            for (const link of links) {
+                const id = clean(link.innerText).match(/^#?\s*(\d+)\s*$/)?.[1];
+                if (!id) continue;
+                const url = new URL(link.getAttribute('href') || '', location.href);
+                const linkedId = url.hash.match(/^#order:(\d+)$/)?.[1];
+                if (linkedId && linkedId !== id) throw new Error('Numer powiązanego zamówienia nie zgadza się z jego odnośnikiem. Odśwież zwrot.');
+                // Akceptujemy wyłącznie stronę zamówień na tym samym koncie Base.
+                const validUrl = url.origin === location.origin && /^\/orders(?:\.php)?$/.test(url.pathname) && linkedId === id;
+                candidates.push({ id, url: validUrl ? url.href : new URL('/orders.php#order:' + id, location.origin).href });
+            }
+            // Base może używać onclick zamiast href lub wyświetlać sam numer.
+            if (!links.length && visibleId) candidates.push({ id: visibleId, url: new URL('/orders.php#order:' + visibleId, location.origin).href });
+        }
+        const ids = [...new Set(candidates.map(item => item.id))];
+        if (ids.length !== 1) throw new Error('Nie udało się odczytać pola „Zamówienie” ze zwrotu. Otwórz powiązane zamówienie i kliknij „Wygeneruj zrzeczenie”.');
+        return { ...candidates.find(item => item.id === ids[0]), returnId: page.id };
+    }
+
+    async function generate() {
+        if (busy) return;
+        if (!/^#return:\d+(?:\b|$)/.test(location.hash)) {
+            try { sessionStorage.removeItem(PDF_CONTINUATION_KEY); } catch (_) { /* PDF zamówienia nie wymaga pamięci sesji. */ }
+            return generateOrder();
+        }
+        try {
+            const target = linkedOrderFromReturn();
+            sessionStorage.setItem(PDF_CONTINUATION_KEY, JSON.stringify({ orderId: target.id, returnId: target.returnId, createdAt: Date.now() }));
+            busy = true;
+            updateButtonState();
+            location.assign(target.url);
+        } catch (error) {
+            busy = false;
+            updateButtonState();
+            alert(`Nie wygenerowano zrzeczenia.\n\n${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+
+    function installReturnPdfContinuation() {
+        let timer;
+        function stop() {
+            clearInterval(timer);
+            try { sessionStorage.removeItem(PDF_CONTINUATION_KEY); } catch (_) { /* Brak pamięci sesji — brak kontynuacji. */ }
+        }
+        function check() {
+            let pending;
+            try { pending = JSON.parse(sessionStorage.getItem(PDF_CONTINUATION_KEY) || 'null'); }
+            catch (_) { stop(); return; }
+            if (!pending) { clearInterval(timer); return; }
+            const target = location.hash.match(/^#order:(\d+)(?:\b|$)/)?.[1];
+            if (!Number.isFinite(pending.createdAt) || !/^\d+$/.test(pending.orderId) || target !== pending.orderId) { stop(); return; }
+            if (Date.now() - pending.createdAt > PDF_CONTINUATION_MS) {
+                stop();
+                alert('Zamówienie nie udostępniło jeszcze wszystkich danych do zrzeczenia. Poczekaj na załadowanie płatności i przesyłek, następnie kliknij „Wygeneruj zrzeczenie”.');
+                return;
+            }
+            // readOrder sprawdza widoczny numer, identyfikatory tabel, płatność
+            // i przesyłki. Stary lub częściowo załadowany panel nie uruchamia PDF.
+            try { readOrder(); } catch (_) { return; }
+            stop();
+            void generateOrder();
+        }
+        function resume() {
+            clearInterval(timer);
+            try { if (!sessionStorage.getItem(PDF_CONTINUATION_KEY)) return; } catch (_) { return; }
+            timer = setInterval(check, 250);
+            check();
+        }
+        window.addEventListener('hashchange', resume);
+        resume();
+    }
+
+
     // TEST_EXPORT
     GM_registerMenuCommand('Wygeneruj zrzeczenie', generate);
     installPageButton();
+    installReturnPdfContinuation();
+})();
+
+(function () {
+'use strict';
+/* Reguły odwzorowane z Kalkulator!J2:Q2, odczyt 2026-09-28.
+ * H jest informacją zapisywaną; obecne formuły nie korzystają z H.
+ * G2/H2 z Dane są celowo przypisane tak jak w formule L (decyzja użytkownika).
+ */
+const DiscountRules = (() => {
+    'use strict';
+    const version = 'sheet-formulas-2026-09-28-v1';
+    const spreadsheetId = '13xrD9AdKtHO2HHpMzWMREp2yBrJ3Zi2J_wyhfv0waXs';
+    const types = ['Obuwie', 'Odzież'];
+    const yesNo = ['Tak', 'Nie'];
+    const dispositions = ['Duża wada', '3 konto', 'Szycie', 'Szewc', 'Do opisu'];
+    const fallback = [3.56, 16.89, 66.56, 13, 34, 0.7, 3.5, 7];
+    const headers = ['Data', 'Login', 'Kod produktu', 'Cena produktu', 'Obuwie / odzież',
+        'Rynek sprzedaży: PL / International', 'Czy klient ma Smart?',
+        'Czy produkt nadaje się do ponownej sprzedaży?', 'Produkt idzie do naprawy lub zostanie odrzucony',
+        'Nasz koszt zwrotu', 'Nasz koszt naprawy', 'Zysk ze sprzedaży odrzutu', 'Nasz koszt jeżeli zwróci',
+        'Maksymalny rabat wynikający z poniesionych kosztów', 'Rabat operacyjny', 'Max możliwy rabat', 'Max możliwy rabat %'];
+    const clean = value => String(value ?? '').normalize('NFC').replace(/[\s\u00a0\u202f]+/gu, ' ').trim();
+    function constants(values) {
+        if (!Array.isArray(values) || values.length !== 8 || values.some(v => typeof v !== 'number' || !Number.isFinite(v) || v < 0)) {
+            throw new Error('Zakładka Dane musi zawierać osiem nieujemnych liczb w A2:H2.');
+        }
+        return values.slice();
+    }
+    function validateItem(item) {
+        if (!item || !types.includes(item.type) || !yesNo.includes(item.resale) || !dispositions.includes(item.disposition)) {
+            throw new Error('Dla każdego zaznaczonego produktu wybierz typ oraz odpowiedzi w H i I.');
+        }
+        if (typeof item.price !== 'number' || !Number.isFinite(item.price) || item.price <= 0 || item.price > 1000000) {
+            throw new Error('Cena produktu musi być dodatnią kwotą w PLN.');
+        }
+    }
+    function calculate(item, context, values) {
+        validateItem(item);
+        const c = constants(values);
+        if (!['PL', 'International'].includes(context.market) || !yesNo.includes(context.smart)) throw new Error('Brakuje rynku lub informacji o Smart.');
+        const j = context.smart === 'Tak' ? c[0] : context.market === 'International' ? c[2] : c[1];
+        const k = item.disposition === 'Szycie' ? c[3] : item.disposition === 'Szewc' ? c[4] : 0;
+        const l = item.disposition === 'Duża wada' ? c[5] : item.disposition === '3 konto' ? (item.type === 'Obuwie' ? c[6] : c[7]) : 0;
+        const m = j + k - l;
+        const n = ['3 konto', 'Duża wada'].includes(item.disposition) ? item.price * 0.7 : m;
+        const o = Math.min(item.price * 0.15, 20);
+        const p = Math.max(n, o);
+        return { returnCost: j, repairCost: k, recovery: l, totalCost: m, costDiscount: n, operationalDiscount: o, maximum: p, percent: p / item.price };
+    }
+    function formulas(row) {
+        return [
+            `=IF(ISBLANK(F${row});0;IF(G${row}="Tak";Dane!$A$2;IF(F${row}="International";Dane!$C$2;Dane!$B$2)))`,
+            `=IF(I${row}="Szycie";Dane!$D$2;IF(I${row}="Szewc";Dane!$E$2;0))`,
+            `=IF(I${row}="Duża wada";Dane!$F$2;IF(I${row}="3 konto";IF(E${row}="Obuwie";Dane!$G$2;Dane!$H$2);0))`,
+            `=J${row}+K${row}-L${row}`,
+            `=IF(OR(I${row}="3 konto";I${row}="duża wada");D${row}*0,7;M${row})`,
+            `=MIN(D${row}*0,15;20)`, `=MAX(N${row};O${row})`, `=P${row}/D${row}`,
+        ];
+    }
+    // Sheets API/GAS może zwrócić formułę w składni angielskiej lub polskiej.
+    const canonicalFormula = value => value.replace(/\s+/g, '').replace(/0,7/g, '0.7').replace(/0,15/g, '0.15').replace(/;/g, ',').toLowerCase();
+    function assertFormulas(actual) {
+        if (!Array.isArray(actual) || actual.length !== 8 || actual.some((v, i) => canonicalFormula(v) !== canonicalFormula(formulas(2)[i]))) {
+            throw new Error('Formuły Kalkulator!J2:Q2 zmieniły się. Zaktualizuj kalkulator przed zapisem.');
+        }
+    }
+    function today(date = new Date()) {
+        const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Warsaw', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
+        const get = type => parts.find(p => p.type === type).value;
+        return `${get('year')}-${get('month')}-${get('day')}`;
+    }
+    return { version, spreadsheetId, types, yesNo, dispositions, fallback, headers, clean, constants, validateItem, calculate, formulas, assertFormulas, today };
+})();
+
+const DISCOUNT_BUTTON = 'stocksell-policz-rabat';
+const CONFIG_KEY = 'bok-discount-connection-v1';
+const PENDING_KEY = 'bok-discount-pending-v1';
+// Stałe są częścią wtyczki. Obliczanie nie wykonuje żądań do Google.
+const LOCAL_DISCOUNT_CONSTANTS = Object.freeze(DiscountRules.constants(DiscountRules.fallback));
+const cleanDiscount = DiscountRules.clean;
+const isVisible = el => Boolean(el && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden');
+const moneyDiscount = value => new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN' }).format(value);
+let discountOpen = false;
+let settingsOpen = false;
+
+function parseDiscountAmount(value, allowNoCurrency = false) {
+    const text = cleanDiscount(value);
+    const match = text.match(/^(\d[\d\s.,]*?)\s*(PLN|zł)?$/iu);
+    if (!match || (!allowNoCurrency && !match[2])) throw new Error('Nie można odczytać kwoty w PLN: ' + text);
+    const raw = match[1].replace(/\s/g, '');
+    // Format PL, format Base 48.99 oraz separatory tysięcy.
+    let normalized = raw;
+    if (/^[0-9]+$/.test(raw)) normalized = raw;
+    else if (/^\d+[.,]\d{1,2}$/.test(raw)) normalized = raw.replace(',', '.');
+    else if (/^\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{2})?$/.test(raw)) {
+        const decimal = raw.match(/[.,](\d{2})$/);
+        normalized = decimal ? raw.slice(0, -3).replace(/[.,]/g, '') + '.' + decimal[1] : raw.replace(/[.,]/g, '');
+    } else throw new Error('Nieznany format kwoty: ' + text);
+    const amount = Number(normalized);
+    if (!Number.isFinite(amount) || amount < 0) throw new Error('Nieprawidłowa kwota.');
+    return amount;
+}
+
+function discountView() {
+    const match = location.hash.match(/^#(order|return):(\d+)(?:\b|$)/);
+    const root = document.querySelector('#panel2');
+    if (!match || !isVisible(root)) throw new Error('Otwórz szczegóły zamówienia lub zwrotu w Base.com.');
+    if (isVisible(document.querySelector('#panel_loading'))) throw new Error('Poczekaj na zakończenie ładowania.');
+    const header = [...root.querySelectorAll('.mail-container-header, .main-container-header')].find(isVisible);
+    const shown = cleanDiscount(header?.innerText).match(/(?:Zamówienie|Zwrot)\s*#?\s*(\d+)/iu)?.[1];
+    if (!header || shown !== match[2]) throw new Error('Widok jeszcze się przełącza. Poczekaj na właściwy numer w nagłówku.');
+    return { root, header, kind: match[1], id: match[2], source: match[1] + ':' + match[2] };
+}
+
+function labelledDiscountValue(root, label) {
+    const values = [...root.querySelectorAll('tr')].filter(isVisible).flatMap(row => {
+        const cells = [...row.children].filter(el => el.matches('td, th'));
+        return cells.length >= 2 && label.test(cleanDiscount(cells[0].innerText)) ? [cleanDiscount(cells[1].innerText)] : [];
+    }).filter(Boolean);
+    return [...new Set(values)];
+}
+
+function readDiscountCountry(root) {
+    const selectors = '#oms_info_delivery_country, #delivery_country, #order_delivery_country, #delivery_country_name, #delivery_address_country, [data-tid="deliveryCountry"]';
+    const candidates = [...root.querySelectorAll(selectors)].filter(isVisible).map(el => cleanDiscount(el.matches('select') ? el.selectedOptions[0]?.textContent : el.innerText));
+    if (!candidates.filter(Boolean).length) {
+        const title = [...root.querySelectorAll('.panel-heading, h3, h4, .panel-title')].find(el => isVisible(el) && /^Adres dostawy$/i.test(cleanDiscount(el.innerText)));
+        const delivery = title?.closest('.panel');
+        candidates.push(...labelledDiscountValue(delivery || root, /^Kraj\s*:$/iu));
+    }
+    const distinct = [...new Set(candidates.filter(v => v && !/^[.\s…-]+$/.test(v)))];
+    if (distinct.length !== 1) throw new Error('Nie udało się jednoznacznie odczytać kraju z adresu dostawy. Rozwiń adres dostawy i zamknij jego edycję.');
+    return distinct[0];
+}
+
+function readDiscountOrder() {
+    const view = discountView();
+    const { root, kind, id, source } = view;
+    const tableId = kind === 'return' ? 'table_return_items' : 'table_order_products';
+    const table = root.querySelector('#' + tableId);
+    if (!isVisible(table)) throw new Error('Poczekaj na załadowanie listy produktów.');
+    const ajax = root.querySelector('#' + tableId + '_ajax_file')?.value;
+    const tableSource = ajax && decodeURIComponent(ajax).match(/params\[\]\s*=\s*(\d+)/)?.[1];
+    if (tableSource && tableSource !== id) throw new Error('Lista produktów pochodzi jeszcze z poprzedniego widoku. Poczekaj na zakończenie ładowania.');
+    if (root.querySelector('#' + tableId + '_page')?.value && root.querySelector('#' + tableId + '_page').value !== '1') throw new Error('Wróć na pierwszą stronę i wyświetl wszystkie produkty.');
+    const loginEl = root.querySelector('#oms_info_allegro_login');
+    const login = isVisible(loginEl) ? cleanDiscount(loginEl.innerText) : labelledDiscountValue(root, /^Klient\s*\(login\)\s*:$/iu)[0];
+    if (!login || /^[.\s…-]+$/.test(login)) throw new Error('Brakuje pola „Klient (login)” w Base.com.');
+    const shippingEl = root.querySelector('#oms_info_price_shipment');
+    const shippingText = isVisible(shippingEl) ? cleanDiscount(shippingEl.innerText) : labelledDiscountValue(root, /^Koszt wysyłki\s*:$/iu)[0];
+    const shipping = parseDiscountAmount(shippingText);
+    const country = readDiscountCountry(root);
+    const market = /^(?:Polska|Poland|PL)(?:\s*\(PL\))?$/iu.test(country) ? 'PL' : 'International';
+    const productCells = [...table.querySelectorAll('td[data-tid="productName"], td.td_product_name')].filter(isVisible);
+    if (!productCells.length) throw new Error('Nie znaleziono produktów w aktualnym widoku.');
+    const counter = root.querySelector('#' + tableId + '_items_counter');
+    const count = cleanDiscount(counter?.value || counter?.textContent);
+    if (/^\d+$/.test(count) && Number(count) > productCells.length) throw new Error('Widoczna jest tylko część produktów. Wyświetl wszystkie produkty przed obliczeniem rabatu.');
+    const products = productCells.map((cell, index) => {
+        const row = cell.closest('tr');
+        const clone = cell.cloneNode(true);
+        const badge = cleanDiscount(cell.querySelector('.stocksell-inline-code')?.textContent);
+        clone.querySelectorAll('.stocksell-inline-code, button, select, input, script, style, .btn').forEach(el => el.remove());
+        const raw = cleanDiscount(clone.textContent);
+        const sku = raw.match(/\[SKU\s+stocksell_([^\]\s]+)\s*\]/iu)?.[1] || '';
+        const code = sku || badge;
+        const name = cleanDiscount(raw.replace(/\[(?:EAN|SKU)\b[^\]]*\]/giu, '').replace(/\(\s*\d{8,}\s*\)/gu, '').replace(/\s*Powód:[\s\S]*$/iu, ''));
+        let price = null;
+        let issue = '';
+        try { price = parseDiscountAmount(row.querySelector('[data-tid="productPrice"]')?.innerText); }
+        catch (_) { issue = 'Nie odczytano ceny w PLN.'; }
+        if (price !== null && price <= 0) issue = 'Cena musi być większa od zera.';
+        if (!code) issue = 'Brak stocksell_ w SKU oraz kodu .stocksell-inline-code. Poczekaj na kod StockSell.';
+        if (!row.id) issue = 'Brak identyfikatora wiersza produktu — odśwież stronę.';
+        const quantity = cleanDiscount(row.querySelector('[data-tid="productQuantity"]')?.innerText) || '1';
+        return { id: row.id || 'missing-' + index, code, name: name || 'Produkt ' + (index + 1), price, quantity, issue };
+    });
+    if (new Set(products.map(p => p.id)).size !== products.length) throw new Error('Lista produktów zawiera powtórzone identyfikatory. Odśwież widok.');
+    return { context: { date: DiscountRules.today(), source, login, country, market, smart: shipping === 0 ? 'Tak' : 'Nie' }, products };
+}
+
+function discountDialog(title, wide = false) {
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'closed' });
+    const shellStyle = document.createElement('style');
+    shellStyle.textContent = `
+        :host{all:initial;color-scheme:light}
+        dialog{width:min(${wide ? '1160px' : '620px'},calc(100vw - 32px));max-height:90vh;padding:0;border:0;border-radius:16px;overflow:hidden;background:#f8fafc;box-shadow:0 20px 90px #0006}
+        dialog::backdrop{background:#0c1729b8}
+        iframe{display:block;width:100%;height:1px;border:0;background:#f8fafc}
+    `;
+    const shell = document.createElement('dialog');
+    shell.setAttribute('aria-label', title);
+    const frame = document.createElement('iframe');
+    frame.title = title;
+    frame.setAttribute('data-stocksell-discount-dialog', '');
+    shell.append(frame);
+    shadow.append(shellStyle, shell);
+    // Osobny dokument zatrzymuje również skróty przechwytywane przez Base
+    // na window/document w fazie capture, zanim dotarłyby do Shadow DOM.
+    document.body.append(host);
+    const frameDocument = frame.contentDocument;
+    const style = frameDocument.createElement('style');
+    style.textContent = `
+      :host{all:initial;color-scheme:light} *{box-sizing:border-box} dialog{width:min(${wide ? '1160px' : '620px'},calc(100vw - 32px));max-height:90vh;overflow:auto;border:0;border-radius:16px;padding:24px;background:#f8fafc;color:#172438;font:14px/1.5 Arial,sans-serif;box-shadow:0 20px 90px #0006} dialog::backdrop{background:#0c1729b8}
+      h2{font-size:23px;line-height:1.2;margin:0 0 10px} p{margin:8px 0 16px} .meta{font-size:13px;color:#4b5e73} .top{display:flex;justify-content:space-between;gap:16px;align-items:start} .actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;margin-top:18px}
+      button{font:600 14px/1.3 Arial,sans-serif;border:1px solid #cad4df;background:#fff;color:#243c55;border-radius:8px;padding:11px 16px;cursor:pointer} button.primary{background:#087f70;border-color:#087f70;color:white} button:disabled{opacity:.5;cursor:default} button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #6cadff;outline-offset:2px}
+      .list{display:grid;gap:12px;margin-top:14px}.product{padding:16px;border:1px solid #d5dfe8;border-radius:12px;background:white}.name{font-weight:700;font-size:14px}.choose{display:flex;gap:10px;align-items:start;cursor:pointer}.choose input{width:18px;height:18px;flex-shrink:0;margin:2px 0}.fields{display:grid;grid-template-columns:1fr 1.4fr 1.3fr 1fr;gap:12px;margin-top:14px}.field{display:flex;flex-direction:column;gap:5px;font-size:12px;color:#34465a}.field select,.field input{width:100%;font:14px Arial,sans-serif;color:#172438;background:white;padding:10px;border:1px solid #b6c5d4;border-radius:6px;min-height:39px}.field input:disabled,.field select:disabled{background:#f1f4f7}
+      .result{margin-top:12px;background:#e9f6f2;border-radius:8px;padding:12px 14px}.result strong{font-size:20px;color:#006c60}.result:empty,.hint:empty{display:none}.hint{margin-top:8px}.error{color:#a52525;margin-top:12px;white-space:pre-line}.status{padding:10px 12px;background:#eef2f7;border-radius:8px;font-size:13px}.total{margin-top:14px;font-size:15px;font-weight:700}.warning{color:#845a07}.link{color:#0667aa}.settings .field{margin-top:14px}.locked{opacity:.72}@media(max-width:800px){.fields{grid-template-columns:1fr 1fr}}@media(max-width:480px){.fields{grid-template-columns:1fr}dialog{padding:16px}}`;
+    style.textContent += '\nhtml{color-scheme:light;background:#f8fafc}body{margin:0}dialog{position:static;box-sizing:border-box;width:100%;max-height:none;margin:0;overflow:visible;box-shadow:none}';
+    frameDocument.head.append(style);
+    const dialog = frameDocument.createElement('dialog');
+    dialog.open = true;
+    dialog.setAttribute('aria-modal', 'true');
+    const add = (tag, text = '', parent = dialog, cls = '') => {
+        const el = frameDocument.createElement(tag);
+        el.textContent = text;
+        if (cls) el.className = cls;
+        parent.append(el);
+        return el;
+    };
+    const h = add('h2', title);
+    h.id = 'discount-title';
+    dialog.setAttribute('aria-labelledby', h.id);
+    frameDocument.body.append(dialog);
+    let escapeHeld = false;
+    let enterButton = null;
+    function requestClose() { dialog.dispatchEvent(new Event('cancel', { cancelable: true })); }
+    shell.addEventListener('cancel', event => { event.preventDefault(); requestClose(); });
+    frameDocument.addEventListener('keydown', event => {
+        if (event.key === 'Tab') {
+            const fields = [...dialog.querySelectorAll('input, select, textarea, button, a[href], [tabindex]')]
+                .filter(el => !el.disabled && el.tabIndex >= 0 && el.getClientRects().length);
+            event.preventDefault();
+            const index = fields.indexOf(frameDocument.activeElement);
+            const next = index < 0 ? (event.shiftKey ? fields.length - 1 : 0)
+                : (index + (event.shiftKey ? -1 : 1) + fields.length) % fields.length;
+            fields[next]?.focus();
+        }
+        if (event.key === 'Escape') { event.preventDefault(); escapeHeld = true; }
+        if (event.key === 'Enter' && event.target.tagName === 'BUTTON') {
+            event.preventDefault(); enterButton = event.target;
+        }
+    }, true);
+    frameDocument.addEventListener('keyup', event => {
+        // Zamykanie dopiero po puszczeniu klawisza: keyup Escape/Enter
+        // również pozostaje w ramce, zamiast trafić do skrótów Base.
+        if (event.key === 'Escape' && escapeHeld) { escapeHeld = false; requestClose(); }
+        if (event.key === 'Enter' && enterButton) {
+            const button = enterButton; enterButton = null;
+            if (button === frameDocument.activeElement && !button.disabled) button.click();
+        }
+    }, true);
+    // Kliknięcia w tło samej ramki/modala też nie trafiają do delegowanych akcji Base.
+    ['click', 'dblclick', 'pointerdown', 'pointerup', 'mousedown', 'mouseup'].forEach(type => {
+        shell.addEventListener(type, event => event.stopPropagation());
+    });
+    const resize = () => {
+        if (!shell.open) return;
+        frame.style.height = Math.ceil(Math.min(dialog.getBoundingClientRect().height, window.innerHeight * 0.9)) + 'px';
+    };
+    const observer = new ResizeObserver(resize);
+    observer.observe(dialog);
+    window.addEventListener('resize', resize);
+    function closeNow() { observer.disconnect(); window.removeEventListener('resize', resize); shell.close(); host.remove(); }
+    return {
+        dialog, add,
+        open() {
+            shell.showModal(); resize();
+            (dialog.querySelector('input:not(:disabled), select:not(:disabled), button:not(:disabled)') || dialog).focus();
+        },
+        close() { closeNow(); },
+    };
+}
+
+function validConnection(config) {
+    return Boolean(config && /^https:\/\/script\.google\.com\/macros\/s\/[a-zA-Z0-9_-]+\/exec$/.test(config.url) && /^[a-zA-Z0-9_-]{32,200}$/.test(config.token));
+}
+async function discountRequest(config, action, payload) {
+    if (!validConnection(config)) throw new Error('Skonfiguruj połączenie z arkuszem: adres /exec oraz token.');
+    return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+            method: 'POST', url: config.url, headers: { 'Content-Type': 'application/json' }, anonymous: true,
+            data: JSON.stringify({ token: config.token, action, payload }), timeout: 60000,
+            onload(response) {
+                try {
+                    if (response.status < 200 || response.status >= 300) throw new Error('Połączenie zwróciło HTTP ' + response.status + '.');
+                    let result;
+                    try { result = JSON.parse(response.responseText); }
+                    catch (_) { throw new Error('Odpowiedź nie jest danymi kalkulatora. Sprawdź adres /exec i dostęp do wdrożenia Apps Script.'); }
+                    if (!result.ok) { const error = new Error(result.message || 'Nie udało się zapisać danych.'); error.code = result.code; error.definitive = result.definitive === true; throw error; }
+                    if (result.spreadsheetId !== DiscountRules.spreadsheetId) throw new Error('Połączenie wskazuje inny arkusz.');
+                    resolve(result);
+                } catch (error) { reject(error); }
+            },
+            ontimeout() { reject(new Error('Przekroczono czas odpowiedzi. Zapis mógł już się udać. Ponów tę samą wysyłkę.')); },
+            onerror() { reject(new Error('Brak połączenia z arkuszem. Sprawdź sieć i uprawnienia Tampermonkey do script.google.com.')); },
+        });
+    });
+}
+
+async function openDiscountSettings(onSaved) {
+    if (settingsOpen) return;
+    settingsOpen = true;
+    const old = await GM_getValue(CONFIG_KEY, {});
+    const { dialog, add, open, close } = discountDialog('Połączenie z arkuszem');
+    dialog.classList.add('settings');
+    add('p', 'Wklej adres wdrożenia Google Apps Script oraz token wygenerowany podczas konfiguracji. Ustawienia zapisują się tylko w Tampermonkey tej przeglądarki.');
+    const urlLabel = add('label', 'Adres aplikacji internetowej (/exec)', dialog, 'field');
+    const url = add('input', '', urlLabel); url.type = 'url'; url.value = old.url || ''; url.autocomplete = 'off';
+    const tokenLabel = add('label', 'Token połączenia', dialog, 'field');
+    const token = add('input', '', tokenLabel); token.type = 'password'; token.value = old.token || ''; token.autocomplete = 'off';
+    const status = add('p', '', dialog, 'error'); status.setAttribute('role', 'status');
+    const actions = add('div', '', dialog, 'actions');
+    const cancel = add('button', 'Zamknij', actions);
+    const save = add('button', 'Sprawdź i zapisz połączenie', actions, 'primary');
+    const finish = () => { settingsOpen = false; close(); };
+    cancel.onclick = finish;
+    dialog.addEventListener('cancel', e => { e.preventDefault(); finish(); });
+    save.onclick = async () => {
+        save.disabled = true;
+        try {
+            const config = { url: url.value.trim(), token: token.value.trim() };
+            const result = await discountRequest(config, 'config');
+            if (result.version !== DiscountRules.version) throw new Error('Wersja Apps Script nie pasuje do wtyczki.');
+            await GM_setValue(CONFIG_KEY, config);
+            onSaved?.(config);
+            status.textContent = 'Połączenie działa. Możesz zamknąć ustawienia i wysłać wybrane produkty.';
+            status.className = 'meta';
+        } catch (error) { status.className = 'error'; status.textContent = error.message; }
+        finally { save.disabled = false; }
+    };
+    open();
+}
+
+async function openDiscountCalculator() {
+    if (discountOpen) return;
+    let snapshot;
+    try { snapshot = readDiscountOrder(); }
+    catch (error) { alert('Nie otwarto kalkulatora rabatów.\n\n' + error.message); return; }
+    discountOpen = true;
+    const { dialog, add, open, close } = discountDialog('Policz rabat', true);
+    const ctx = snapshot.context;
+    add('p', `${ctx.source.startsWith('return') ? 'Zwrot' : 'Zamówienie'} ${ctx.source.split(':')[1]} · ${ctx.login} · ${ctx.date}`, dialog, 'meta');
+    add('p', `Kraj: ${ctx.country} · Rynek: ${ctx.market} · Smart: ${ctx.smart.toUpperCase()} (według kosztu wysyłki)` , dialog, 'meta');
+    add('p', 'Zaznacz produkty i uzupełnij typ, H oraz I — rabat pojawi się od razu. Kwoty dotyczą jednej sztuki. Finalny rabat jest opcjonalny.');
+    const status = add('div', '', dialog, 'status'); status.setAttribute('role', 'status');
+    const list = add('div', '', dialog, 'list');
+    let calculation = null;
+    let working = false;
+    let pending = await GM_getValue(PENDING_KEY, null);
+    let connection = await GM_getValue(CONFIG_KEY, {});
+    let saveBlock = '';
+    const controls = snapshot.products.map((product, index) => {
+        const article = add('section', '', list, 'product');
+        const label = add('label', '', article, 'choose');
+        const checked = add('input', '', label); checked.type = 'checkbox'; checked.disabled = !!product.issue;
+        const name = add('span', product.name, label, 'name');
+        checked.setAttribute('aria-label', 'Wybierz produkt ' + (index + 1));
+        add('p', `Kod: ${product.code || 'brak'} · Cena: ${product.price === null ? 'brak' : moneyDiscount(product.price)} · Ilość w Base: ${product.quantity}`, article, 'meta');
+        if (product.issue) add('div', product.issue, article, 'error');
+        if (product.quantity !== '1') add('div', 'Wyliczenie i jeden wiersz arkusza dotyczą jednej sztuki produktu, bez mnożenia przez ilość.', article, 'meta');
+        const fields = add('div', '', article, 'fields');
+        const selectField = (title, options) => {
+            const label = add('label', title, fields, 'field');
+            const select = add('select', '', label);
+            add('option', 'Wybierz…', select).value = '';
+            options.forEach(value => { add('option', value, select).value = value; });
+            select.disabled = true;
+            return select;
+        };
+        const type = selectField('E · Typ produktu', DiscountRules.types);
+        const resale = selectField('H · Nadaje się do ponownej sprzedaży?', DiscountRules.yesNo);
+        const disposition = selectField('I · Dalsze postępowanie', DiscountRules.dispositions);
+        const finalLabel = add('label', 'R · Finalny rabat (zł, opcjonalnie)', fields, 'field');
+        const final = add('input', '', finalLabel); final.type = 'text'; final.inputMode = 'decimal'; final.placeholder = 'Nie ustalono'; final.disabled = true;
+        const hint = add('div', '', article, 'meta hint');
+        const result = add('div', '', article, 'result');
+        return { product, checked, type, resale, disposition, final, hint, result, article, name };
+    });
+    const total = add('div', '', dialog, 'total');
+    total.setAttribute('aria-live', 'polite');
+    add('p', 'Obliczenia korzystają ze stałych zapisanych we wtyczce i działają bez połączenia z arkuszem. H jest zapisywane, ale według obecnych formuł nie wpływa na rabat.', dialog, 'meta');
+    const errorBox = add('div', '', dialog, 'error'); errorBox.setAttribute('role', 'alert');
+    const actions = add('div', '', dialog, 'actions');
+    const settings = add('button', 'Połączenie z arkuszem', actions);
+    const cancel = add('button', 'Zamknij', actions);
+    const send = add('button', pending ? 'Ponów poprzednią wysyłkę' : 'Wyślij do arkusza', actions, 'primary'); send.disabled = !pending;
+    function setControls() {
+        for (const c of controls) {
+            c.checked.disabled = working || !!pending || !!c.product.issue;
+            [c.type, c.resale, c.disposition, c.final].forEach(el => { el.disabled = working || !!pending || !c.checked.checked; });
+        }
+        send.disabled = working || (!pending && (!calculation || !validConnection(connection) || !!saveBlock));
+        settings.disabled = working;
+        cancel.disabled = working;
+    }
+    function assertCurrent() {
+        if (JSON.stringify(readDiscountOrder()) !== JSON.stringify(snapshot)) throw new Error('Dane w Base.com zmieniły się. Zamknij i otwórz kalkulator ponownie.');
+    }
+    function recalculate() {
+        if (pending) { setControls(); return; }
+        calculation = null;
+        controls.forEach(c => { c.result.replaceChildren(); c.hint.textContent = ''; c.hint.className = 'meta hint'; });
+        total.textContent = ''; errorBox.textContent = saveBlock;
+        try {
+            assertCurrent();
+            const selected = controls.filter(c => c.checked.checked);
+            if (!selected.length) {
+                status.textContent = 'Zaznacz produkty. Rabaty przeliczają się automatycznie po uzupełnieniu pól.';
+                return;
+            }
+            const items = [];
+            let computed = 0, sum = 0, invalid = 0;
+            for (const c of selected) {
+                const missing = [!c.type.value && 'typ produktu', !c.resale.value && 'H', !c.disposition.value && 'I'].filter(Boolean);
+                if (missing.length) { c.hint.textContent = 'Uzupełnij: ' + missing.join(', ') + '.'; continue; }
+                try {
+                    if (c.product.issue) throw new Error(c.product.issue);
+                    const item = { id: c.product.id, code: c.product.code, price: c.product.price, type: c.type.value,
+                        resale: c.resale.value, disposition: c.disposition.value, finalDiscount: null };
+                    const result = DiscountRules.calculate(item, ctx, LOCAL_DISCOUNT_CONSTANTS);
+                    computed++; sum += result.maximum;
+                    add('strong', `${moneyDiscount(result.maximum)} · ${(result.percent * 100).toLocaleString('pl-PL', { maximumFractionDigits: 2 })}%`, c.result);
+                    add('div', `Maksymalny rabat · koszt zwrotu: ${moneyDiscount(result.returnCost)} · naprawa: ${moneyDiscount(result.repairCost)} · odrzut: ${moneyDiscount(result.recovery)}`, c.result, 'meta');
+                    if (result.maximum > item.price) add('div', 'Wynik formuły przekracza cenę produktu. Formuła arkusza nie ogranicza wyniku do ceny.', c.result, 'warning');
+                    item.finalDiscount = c.final.value.trim() === '' ? null : parseDiscountAmount(c.final.value, true);
+                    if (item.finalDiscount !== null && item.finalDiscount > item.price) throw new Error('Finalny rabat nie może być większy od ceny produktu.');
+                    if (item.finalDiscount !== null && item.finalDiscount > result.maximum + 0.005) add('div', 'Wpisany finalny rabat przekracza wyliczone maksimum.', c.result, 'warning');
+                    items.push(item);
+                } catch (error) { invalid++; c.hint.textContent = error.message; c.hint.className = 'error hint'; }
+            }
+            if (computed) total.textContent = computed === selected.length
+                ? `Wybrano: ${selected.length} · Suma maksymalnych rabatów: ${moneyDiscount(sum)}`
+                : `Obliczono: ${computed} z ${selected.length} · Suma dla uzupełnionych produktów: ${moneyDiscount(sum)}`;
+            if (items.length === selected.length) calculation = { items, constants: LOCAL_DISCOUNT_CONSTANTS.slice() };
+            if (saveBlock) status.textContent = 'Rabaty obliczono lokalnie. Zapis wymaga uzgodnienia stałych z arkuszem.';
+            else if (invalid) status.textContent = 'Popraw zaznaczone pola przed wysyłką.';
+            else if (!calculation) status.textContent = 'Uzupełnij typ, H i I dla zaznaczonych produktów — wyniki pojawiają się na bieżąco.';
+            else status.textContent = validConnection(connection)
+                ? 'Rabaty są aktualne. Możesz wysłać wybrane produkty do arkusza.'
+                : 'Rabaty są aktualne. Aby je zapisać, skonfiguruj połączenie z arkuszem.';
+        } catch (error) { errorBox.textContent = error.message; status.textContent = 'Nie obliczono rabatu.'; }
+        finally { setControls(); }
+    }
+    controls.forEach(c => [c.checked, c.type, c.resale, c.disposition, c.final].forEach(el => {
+        el.addEventListener('input', () => { if (!working) recalculate(); });
+    }));
+    send.onclick = async () => {
+        if (working) return;
+        working = true; setControls(); errorBox.textContent = '';
+        try {
+            if (!pending) {
+                // Odczyt ustawień jest lokalny; jedynym żądaniem sieciowym jest zapis.
+                connection = await GM_getValue(CONFIG_KEY, {});
+                if (!validConnection(connection)) throw new Error('Skonfiguruj połączenie z arkuszem, aby zapisać rabaty.');
+                assertCurrent();
+                recalculate();
+                if (!calculation || saveBlock) throw new Error(saveBlock || 'Uzupełnij wymagane pola wszystkich zaznaczonych produktów.');
+                assertCurrent();
+                // Kolejka jest zapisana PRZED wysłaniem. Utrata odpowiedzi nie tworzy nowego żądania.
+                pending = { config: connection, payload: { requestId: crypto.randomUUID(), version: DiscountRules.version,
+                    context: ctx, items: calculation.items, constants: calculation.constants } };
+                await GM_setValue(PENDING_KEY, pending);
+            }
+            status.textContent = `Zapisywanie ${pending.payload.items.length} produktów (${pending.payload.context.source})…`;
+            const response = await discountRequest(pending.config, 'append', pending.payload);
+            if (!Array.isArray(response.rows) || response.rows.length !== pending.payload.items.length || response.rows.some(n => !Number.isInteger(n) || n < 2)) throw new Error('Nie potwierdzono numerów zapisanych wierszy. Ponów tę samą wysyłkę.');
+            await GM_setValue(PENDING_KEY, null);
+            pending = null; calculation = null;
+            controls.forEach(c => { c.checked.checked = false; });
+            recalculate();
+            status.textContent = `${response.duplicate ? 'Potwierdzono wcześniejszy zapis' : 'Zapisano'}: wiersze ${response.rows.join(', ')}. `;
+            const link = add('a', 'Otwórz zapis w arkuszu', status, 'link');
+            link.href = `https://docs.google.com/spreadsheets/d/${DiscountRules.spreadsheetId}/edit#gid=0&range=A${response.rows[0]}:R${response.rows.at(-1)}`;
+            link.target = '_blank'; link.rel = 'noopener noreferrer';
+            send.textContent = 'Wyślij do arkusza';
+        } catch (error) {
+            if (error.definitive) {
+                await GM_setValue(PENDING_KEY, null); pending = null; calculation = null;
+                send.textContent = 'Wyślij do arkusza';
+            }
+            if (error.code === 'STALE_RULES') saveBlock = 'Stałe zapisane we wtyczce różnią się od arkusza. Zaktualizuj stałe we wtyczce lub przywróć zgodne wartości w zakładce Dane. Samo ponowne przeliczenie nie zmieni wbudowanych stałych.';
+            errorBox.textContent = saveBlock || error.message;
+            if (pending) {
+                send.textContent = 'Ponów poprzednią wysyłkę';
+                status.textContent = 'Brak potwierdzenia zapisu. Ponowienie wyśle ten sam zestaw; serwer sprawdzi, czy został już zapisany.';
+            } else status.textContent = 'Arkusz nie przyjął nowego zapisu. Sprawdź komunikat.';
+        } finally { working = false; setControls(); }
+    };
+    settings.onclick = () => { void openDiscountSettings(config => { connection = config; recalculate(); }); };
+    const finish = () => { if (working) return; discountOpen = false; close(); };
+    cancel.onclick = finish;
+    dialog.addEventListener('cancel', e => { e.preventDefault(); finish(); });
+    if (pending) status.textContent = `Poprzednia wysyłka (${pending.payload.context.source}, ${pending.payload.items.length} produktów) nie ma potwierdzenia. Kliknij „Ponów poprzednią wysyłkę”, aby sprawdzić i dokończyć zapis.`;
+    recalculate(); open();
+}
+
+function syncDiscountButton() {
+    let view;
+    try { view = discountView(); } catch (_) { document.getElementById(DISCOUNT_BUTTON)?.remove(); return; }
+    let button = document.getElementById(DISCOUNT_BUTTON);
+    if (!button) {
+        button = document.createElement('button'); button.id = DISCOUNT_BUTTON; button.type = 'button';
+        button.textContent = 'Policz rabat'; button.className = 'btn btn-sm btn-success';
+        button.style.cssText = 'display:inline-block;margin-left:10px;vertical-align:middle;padding:7px 13px;border:1px solid #087f70;border-radius:18px;background:#087f70;color:#fff;font:600 12px/1.3 Arial,sans-serif;cursor:pointer;white-space:nowrap;';
+        button.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); void openDiscountCalculator(); });
+    }
+    const customer = [...view.header.children].find(el => el.matches('div.text-sm:not(.pull-right)'));
+    const pdf = view.header.querySelector('#stocksell-zrzeczenie-button');
+    const anchor = pdf || customer;
+    if (anchor) { if (anchor.nextElementSibling !== button) anchor.after(button); }
+    else if (!view.header.contains(button)) view.header.append(button);
+}
+let discountScheduled = false;
+function scheduleDiscountButton() {
+    if (discountScheduled) return;
+    discountScheduled = true;
+    setTimeout(() => { discountScheduled = false; syncDiscountButton(); }, 120);
+}
+// DISCOUNT_TEST_EXPORT
+GM_registerMenuCommand('Policz rabat', () => { void openDiscountCalculator(); });
+GM_registerMenuCommand('Rabaty — połączenie z arkuszem', () => { void openDiscountSettings(); });
+new MutationObserver(scheduleDiscountButton).observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'style'] });
+window.addEventListener('hashchange', scheduleDiscountButton);
+syncDiscountButton();
+
 })();
