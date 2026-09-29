@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Base.com - Zrzeczenie przesyłki PDF
 // @namespace    stocksell.zrzeczenie
-// @version      1.5.4
+// @version      1.5.5
 // @description  Zrzeczenie PDF oraz kalkulator rabatów z zapisem do Google Sheets.
 // @match        https://panel.baselinker.com/*
 // @match        https://panel.base.com/*
@@ -47,7 +47,7 @@ however, cannot be released under any other type of license.  The
 requirement for fonts to remain under this license does not apply to
 any document created using the fonts or their derivatives.
 
-
+ 
 
 DEFINITIONS
 "Font Software" refers to the set of files released by the Copyright
@@ -104,11 +104,11 @@ Software, subject to the following conditions:
    Software.
 
 
-
+ 
 TERMINATION
 This license becomes null and void if any of the above conditions are not met.
 
-
+ 
 
 DISCLAIMER
 THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
@@ -1110,7 +1110,7 @@ async function openDiscountSettings(onSaved) {
             if (result.version !== DiscountRules.version || result.protocol !== DiscountRules.protocol) throw new Error('Zaktualizuj kod Apps Script i wdróż nową wersję istniejącego wdrożenia.');
             await GM_setValue(CONFIG_KEY, config);
             onSaved?.(config);
-            status.textContent = `Połączenie działa${result.serverVersion ? ' (serwer ' + result.serverVersion + ')' : ''}. Dostęp do Base i konfiguracja pól zostaną sprawdzone w kalkulatorze.`;
+            status.textContent = `Połączenie działa${result.serverVersion ? ' (serwer ' + result.serverVersion + ')' : ''}. Dostęp do Base i konfiguracja pól zostaną sprawdzone przy zapisie rabatu.`;
             status.className = 'meta';
         } catch (error) { status.className = 'error'; status.textContent = error.message; }
         finally { save.disabled = false; }
@@ -1322,7 +1322,7 @@ async function openDiscountCalculator() {
             const id = c.product.id.match(/^sale_item_row_(\d+)$/)?.[1];
             const map = response.mapping.find(m => m.sourceProductId === id);
             c.issue = !map?.orderProductId ? 'Brak powiązania z pozycją oryginalnego zamówienia. Otwórz zamówienie.'
-                : map.originalPrice !== c.product.price || map.linkedPrice !== c.product.price ? 'Cena w API Base różni się od widoku. Odśwież stronę.' : '';
+                : map.originalPrice !== c.product.price || (!response.preview && map.linkedPrice !== c.product.price) ? 'Cena w API Base różni się od widoku. Odśwież stronę.' : '';
             c.orderProductId = map?.orderProductId || '';
             const saved = response.entries.find(e => e.orderProductId === c.orderProductId);
             if (saved) {
@@ -1357,9 +1357,12 @@ async function openDiscountCalculator() {
     async function load(refreshFx = false) {
         if (!validConnection(connection) || pending?.legacy) { recalculate(); return; }
         working = true; ready = false; errorBox.textContent = ''; setControls();
-        status.textContent = refreshFx ? 'Pobieranie najnowszego opublikowanego kursu NBP…' : 'Wczytywanie zapisanej kalkulacji i danych Base…';
+        status.textContent = refreshFx ? 'Pobieranie najnowszego opublikowanego kursu NBP…' : 'Wczytywanie zapisanej kalkulacji…';
         try {
-            const response = await discountRequest(connection, 'load', { source: ctx.source, refreshFx }, seconds => {
+            const view = { currency, products: snapshot.products.map(product => ({
+                id: product.id.match(/^sale_item_row_([1-9]\d*)$/)?.[1], price: product.price,
+            })).filter(product => product.id && Number.isFinite(product.price) && product.price > 0) };
+            const response = await discountRequest(connection, 'load', { source: ctx.source, refreshFx, view }, seconds => {
                 if (!closed) status.textContent = `Wczytywanie kalkulacji… ${seconds} s.${seconds >= 30 ? ' Serwer odpowiada wolniej niż zwykle.' : ''}`;
             });
             if (closed) return;
