@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Base.com - Zrzeczenie przesyłki PDF
 // @namespace    stocksell.zrzeczenie
-// @version      1.5.5
+// @version      1.5.6
 // @description  Zrzeczenie PDF oraz kalkulator rabatów z zapisem do Google Sheets.
 // @match        https://panel.baselinker.com/*
 // @match        https://panel.base.com/*
@@ -47,7 +47,7 @@ however, cannot be released under any other type of license.  The
 requirement for fonts to remain under this license does not apply to
 any document created using the fonts or their derivatives.
 
- 
+
 
 DEFINITIONS
 "Font Software" refers to the set of files released by the Copyright
@@ -104,11 +104,11 @@ Software, subject to the following conditions:
    Software.
 
 
- 
+
 TERMINATION
 This license becomes null and void if any of the above conditions are not met.
 
- 
+
 
 DISCLAIMER
 THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
@@ -1164,7 +1164,8 @@ async function openDiscountCalculator() {
     // Nie porzucamy operacji, która mogła zostać wykonana przed aktualizacją.
     const legacyPending = await GM_getValue('bok-discount-pending-v1', null);
     if (!pending && legacyPending) pending = { ...legacyPending, action: 'append', legacy: true };
-    let working = false, ready = false, closed = false, server = null, calculation = null, fatal = '';
+    let working = false, loading = false, loadingSeconds = 0, ready = false, closed = false, server = null, calculation = null, fatal = '';
+    let preserveEditsAfterPending = false, loadFailed = false;
     let fx = currency === 'PLN' ? { currency, rate: 1, date: '', table: '' } : null;
     add('p', `${ctx.source.startsWith('return') ? 'Zwrot' : 'Zamówienie'} ${ctx.source.split(':')[1]} · ${ctx.login}`, body, 'meta');
     add('p', `Pracownik: ${ctx.employee}`, body, 'meta');
@@ -1206,26 +1207,32 @@ async function openDiscountCalculator() {
         const comment = add('textarea', '', commentLabel); comment.rows = 2; comment.maxLength = 2000;
         const saved = add('div', '', article, 'meta');
         const hint = add('div', '', article, 'meta hint'), result = add('div', '', article, 'result');
-        return { product, checked, type, resale, disposition, final, finalCurrency, percent, finalMode: 'amount', comment, saved, hint, result, priceLabel, calculationDate: ctx.date, orderProductId: '', dirty: false, issue: '' };
+        return { product, checked, type, resale, disposition, final, finalCurrency, percent, finalMode: 'amount', comment, saved, hint, result, priceLabel, calculationDate: ctx.date, orderProductId: '', dirty: false, dirtyFields: new Set(), issue: '' };
     });
     add('p', 'Zapisz w Base zachowuje kalkulację roboczą. Puste pole finalnego rabatu oznacza wyliczone maksimum. Możesz też wpisać własną kwotę lub procent ceny; 0 oznacza brak rabatu.', body, 'meta');
+    if (currency !== 'PLN') add('p', 'Wybrana waluta dotyczy wpisywanej kwoty. Do arkusza finalny rabat zawsze trafia w PLN, po przeliczeniu zapisanym kursem NBP.', body, 'meta');
     const errorBox = add('div', '', footer, 'error'); errorBox.setAttribute('role', 'alert');
     const actions = add('div', '', footer, 'actions');
     const settings = add('button', 'Połączenie z arkuszem', actions), cancel = add('button', 'Zamknij', actions);
     const draft = add('button', 'Zapisz w Base', actions);
     const send = add('button', 'Wyślij finalny rabat do arkusza i do Base', actions, 'primary');
     const retry = add('button', 'Dokończ poprzedni zapis', actions, 'primary');
+    const reload = add('button', 'Ponów wczytywanie', actions);
     function setControls() {
         for (const c of controls) {
             c.checked.disabled = working || !!pending || !!c.product.issue || !!c.issue;
             [c.type, c.resale, c.disposition, c.final, c.finalCurrency, c.percent, c.comment].forEach(el => { el.disabled = working || !!pending || !c.checked.checked; });
         }
-        const allowed = !working && !pending && ready && calculation && !fatal;
+        const allowed = !working && !loading && !pending && ready && calculation && !fatal;
         draft.disabled = !allowed;
         send.disabled = !allowed || calculation.items.some(item => item.finalAmount === null && DiscountRules.round(DiscountRules.amounts(item, currency, fx, ctx).result.maximum) > DiscountRules.round(item.originalPrice * fx.rate));
-        retry.hidden = !pending; retry.disabled = working || !pending;
-        settings.disabled = working || !!pending; cancel.disabled = working;
-        refresh.disabled = working || !!pending || !ready;
+        retry.hidden = !pending; retry.disabled = working || loading || !pending;
+        settings.disabled = working || loading || !!pending; cancel.disabled = working;
+        refresh.disabled = working || loading || !!pending || !ready;
+        reload.hidden = !loadFailed || !!pending; reload.disabled = working || loading;
+    }
+    function loadingMessage() {
+        return `Wczytywanie kalkulacji w tle… ${loadingSeconds} s. Możesz już zaznaczać produkty i uzupełniać pola. Zapis będzie dostępny po wczytaniu.${loadingSeconds >= 30 ? ' Serwer odpowiada wolniej niż zwykle.' : ''}`;
     }
     function signature(value) {
         const { date, ...context } = value.context;
@@ -1267,6 +1274,7 @@ async function openDiscountCalculator() {
             for (const c of selected) {
                 const missing = [!c.type.value && 'typ produktu', !c.resale.value && 'H', !c.disposition.value && 'I'].filter(Boolean);
                 if (missing.length) { c.hint.textContent = 'Uzupełnij: ' + missing.join(', ') + '.'; continue; }
+                if (!fx) { c.hint.textContent = 'Oczekiwanie na kurs NBP. Możesz już wpisać kwotę, procent i komentarz; wynik pojawi się po wczytaniu kursu.'; continue; }
                 try {
                     if (c.product.issue || c.issue) throw new Error(c.product.issue || c.issue);
                     const item = { id: c.product.id, code: c.product.code, originalPrice: c.product.price, type: c.type.value, resale: c.resale.value,
@@ -1296,7 +1304,8 @@ async function openDiscountCalculator() {
             }
             if (computed) total.textContent = `Obliczono: ${computed} z ${selected.length} · Suma maksymalnych rabatów: ${moneyDiscount(sum)}${currency !== 'PLN' ? ' ≈ ' + moneyDiscount(DiscountRules.round(sum / fx.rate), currency) : ''}`;
             if (selected.length && items.length === selected.length) calculation = { items };
-            if (pending) status.textContent = `Niedokończony zapis (${pending.payload.context.source}). Kliknij „Dokończ poprzedni zapis”. Ponowienie zachowa ten sam identyfikator i dane.`;
+            if (pending) status.textContent = `Niedokończony zapis (${pending.payload.context.source}). Kliknij „Dokończ poprzedni zapis”. Ponowienie zachowa ten sam identyfikator i dane.${preserveEditsAfterPending ? ' Nowe dane wpisane podczas wczytywania pozostają w formularzu — zapiszesz je osobno po dokończeniu poprzedniej operacji.' : ''}`;
+            else if (loading) status.textContent = loadingMessage();
             else if (!ready) status.textContent = 'Możesz obliczać rabat lokalnie. Zapis i odtworzenie danych wymagają działającego połączenia z Apps Script i Base.';
             else if (!selected.length) status.textContent = 'Zaznacz produkty do kalkulacji lub aktualizacji. Odznaczenie nie usuwa wcześniejszego zapisu.';
             else if (!calculation) status.textContent = 'Uzupełnij zaznaczone pola. Gotowe produkty pokazują wynik na bieżąco.';
@@ -1307,17 +1316,32 @@ async function openDiscountCalculator() {
     controls.forEach(c => [c.checked, c.type, c.resale, c.disposition, c.final, c.finalCurrency, c.percent, c.comment].forEach(el => {
         el.addEventListener('input', () => {
             c.dirty = true;
+            c.dirtyFields.add(['checked', 'type', 'resale', 'disposition', 'final', 'finalCurrency', 'percent', 'comment'].find(key => c[key] === el));
             if (el === c.percent) c.finalMode = 'percent';
             if (el === c.final) c.finalMode = 'amount';
-            if ([c.type, c.resale, c.disposition].includes(el)) c.calculationDate = DiscountRules.today();
+            if ([c.type, c.resale, c.disposition].includes(el)) { c.calculationDate = DiscountRules.today(); c.dirtyFields.add('date'); }
             recalculate();
         });
     }));
+    function restoreItem(c, item, selected) {
+        // Odpowiedź może przyjść już po rozpoczęciu edycji. Uzupełniamy tylko
+        // nietknięte pola; kwota/procent/waluta stanowią jedną całość.
+        if (!c.dirtyFields.has('checked')) c.checked.checked = selected && !c.issue && !c.product.issue;
+        if (!item) return;
+        for (const key of ['type', 'resale', 'disposition', 'comment']) if (!c.dirtyFields.has(key)) c[key].value = item[key];
+        if (!['final', 'finalCurrency', 'percent'].some(key => c.dirtyFields.has(key))) {
+            c.final.value = item.finalAmount === null ? '' : String(item.finalAmount).replace('.', ',');
+            c.finalMode = item.finalPercent != null ? 'percent' : 'amount';
+            c.percent.value = item.finalPercent != null ? String(item.finalPercent).replace('.', ',') : '';
+            c.finalCurrency.value = item.finalCurrency;
+        }
+        if (!c.dirtyFields.has('date')) c.calculationDate = item.calculationDate;
+    }
     function restore(response, refreshFx) {
         if (response.protocol !== DiscountRules.protocol) throw new Error('Zaktualizuj Apps Script i wdróż nową wersję istniejącego wdrożenia.');
         if (response.currency !== currency) throw new Error('Waluta z API Base różni się od otwartego widoku. Odśwież stronę.');
         DiscountRules.validateFx(response.fx, currency);
-        server = response; fx = response.fx; ready = true;
+        server = response; fx = response.fx;
         for (const c of controls) {
             const id = c.product.id.match(/^sale_item_row_(\d+)$/)?.[1];
             const map = response.mapping.find(m => m.sourceProductId === id);
@@ -1326,52 +1350,45 @@ async function openDiscountCalculator() {
             c.orderProductId = map?.orderProductId || '';
             const saved = response.entries.find(e => e.orderProductId === c.orderProductId);
             if (saved) {
-                c.saved.textContent = `${saved.status === 'final' ? 'Zapisano decyzję finalną' : 'Zapisano roboczo'} · data obliczenia: ${saved.calculationDate}`;
+                c.saved.textContent = `${saved.status === 'final' ? 'Zapisano decyzję finalną' : 'Zapisano roboczo'} · data obliczenia: ${saved.calculationDate}${c.dirty ? ' · masz niezapisane zmiany' : ''}`;
                 if (saved.originalPrice !== c.product.price || saved.code !== c.product.code) c.issue = 'Cena lub kod różnią się od zapisanej kalkulacji. Wymagana jest weryfikacja zamówienia.';
-                if (!c.dirty && !refreshFx) {
-                    c.checked.checked = !c.issue && !c.product.issue;
-                    c.type.value = saved.type; c.resale.value = saved.resale; c.disposition.value = saved.disposition;
-                    c.final.value = saved.finalAmount === null ? '' : String(saved.finalAmount).replace('.', ',');
-                    c.finalMode = saved.finalPercent != null ? 'percent' : 'amount';
-                    c.percent.value = saved.finalPercent != null ? String(saved.finalPercent).replace('.', ',') : '';
-                    c.finalCurrency.value = saved.finalCurrency; c.comment.value = saved.comment; c.calculationDate = saved.calculationDate;
-                }
+                if (!refreshFx) restoreItem(c, saved, true);
             }
-            if (refreshFx && c.checked.checked) { c.calculationDate = DiscountRules.today(); c.dirty = true; }
+            if (refreshFx && c.checked.checked) { c.calculationDate = DiscountRules.today(); c.dirty = true; c.dirtyFields.add('date'); }
         }
-        if (response.pending && !pending) pending = { config: connection, ...response.pending };
+        if (response.pending && !pending) {
+            preserveEditsAfterPending = controls.some(c => c.dirty);
+            pending = { config: connection, ...response.pending };
+        }
         if (pending && pending.payload.context.source === ctx.source && !pending.legacy) {
             for (const c of controls) {
                 const item = pending.payload.items.find(i => i.id === c.product.id);
-                c.checked.checked = !!item;
-                if (!item) continue;
-                c.type.value = item.type; c.resale.value = item.resale; c.disposition.value = item.disposition;
-                c.final.value = item.finalAmount === null ? '' : String(item.finalAmount).replace('.', ',');
-                c.finalMode = item.finalPercent != null ? 'percent' : 'amount';
-                c.percent.value = item.finalPercent != null ? String(item.finalPercent).replace('.', ',') : '';
-                c.finalCurrency.value = item.finalCurrency; c.comment.value = item.comment; c.calculationDate = item.calculationDate;
+                restoreItem(c, item, !!item);
             }
             fx = pending.payload.fx;
         }
+        ready = true;
     }
     async function load(refreshFx = false) {
+        if (closed || working || loading) return;
         if (!validConnection(connection) || pending?.legacy) { recalculate(); return; }
-        working = true; ready = false; errorBox.textContent = ''; setControls();
-        status.textContent = refreshFx ? 'Pobieranie najnowszego opublikowanego kursu NBP…' : 'Wczytywanie zapisanej kalkulacji…';
+        loading = true; loadingSeconds = 0; ready = false; loadFailed = false; errorBox.textContent = ''; setControls();
+        status.textContent = loadingMessage();
         try {
             const view = { currency, products: snapshot.products.map(product => ({
                 id: product.id.match(/^sale_item_row_([1-9]\d*)$/)?.[1], price: product.price,
             })).filter(product => product.id && Number.isFinite(product.price) && product.price > 0) };
             const response = await discountRequest(connection, 'load', { source: ctx.source, refreshFx, view }, seconds => {
-                if (!closed) status.textContent = `Wczytywanie kalkulacji… ${seconds} s.${seconds >= 30 ? ' Serwer odpowiada wolniej niż zwykle.' : ''}`;
+                loadingSeconds = seconds;
+                if (!closed && !pending) status.textContent = loadingMessage();
             });
             if (closed) return;
             assertCurrent(); restore(response, refreshFx);
-        } catch (error) { errorBox.textContent = error.message; }
-        finally { working = false; recalculate(); }
+        } catch (error) { if (!closed) { loadFailed = true; errorBox.textContent = error.message; } }
+        finally { loading = false; if (!closed) recalculate(); }
     }
     async function save(action) {
-        if (working) return;
+        if (closed || working || loading) return;
         working = true; errorBox.textContent = ''; setControls();
         try {
             if (!pending) {
@@ -1394,16 +1411,18 @@ async function openDiscountCalculator() {
             });
             if (!pending.legacy && (response.protocol !== 2 || !Number.isInteger(response.revision))) throw new Error('Nie potwierdzono zapisu. Ponów tę samą operację.');
             if ((pending.action === 'finalize' || pending.legacy) && (!Array.isArray(response.rows) || response.rows.length !== pending.payload.items.length || response.rows.some(r => !Number.isInteger(r) || r < 2))) throw new Error('Nie potwierdzono wierszy arkusza. Ponów tę samą operację.');
-            const completed = pending.action, completedSource = pending.payload.context.source;
+            const completed = pending.action, completedSource = pending.payload.context.source, keptEdits = preserveEditsAfterPending;
             if (pending.legacy) await GM_setValue('bok-discount-pending-v1', null);
             await GM_setValue(PENDING_KEY, null); pending = null;
-            controls.forEach(c => { c.dirty = false; });
+            preserveEditsAfterPending = false;
+            if (!keptEdits) controls.forEach(c => { c.dirty = false; c.dirtyFields.clear(); });
             working = false;
             if (response.workflow && completedSource === ctx.source) {
                 assertCurrent(); restore(response.workflow, false); recalculate();
             } else await load();
             status.textContent = completed === 'draft' ? 'Zapisano roboczo w Base. Możesz wrócić do kalkulacji później, także na innym komputerze.'
                 : `Potwierdzono zapis finalny${completed === 'append' ? ' w arkuszu' : ' w Base i arkuszu'}: wiersze ${response.rows.join(', ')}. `;
+            if (keptEdits) status.textContent += ' Dokończono poprzednią operację. Nowe zmiany z formularza nie zostały jeszcze wysłane — możesz je teraz zapisać.';
             if (response.rows?.length) {
                 const link = add('a', 'Otwórz zapis w arkuszu', status, 'link');
                 link.href = `https://docs.google.com/spreadsheets/d/${DiscountRules.spreadsheetId}/edit#gid=0&range=A${response.rows[0]}:S${response.rows.at(-1)}`;
@@ -1423,6 +1442,7 @@ async function openDiscountCalculator() {
     send.onclick = () => { void save('finalize'); };
     retry.onclick = () => { void save(pending.action); };
     refresh.onclick = () => { void load(true); };
+    reload.onclick = () => { void load(); };
     settings.onclick = () => { void openDiscountSettings(config => { connection = config; void load(); }); };
     const finish = () => { if (working) return; closed = true; discountOpen = false; close(); };
     cancel.onclick = finish; dialog.addEventListener('cancel', event => { event.preventDefault(); finish(); });
