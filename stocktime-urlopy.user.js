@@ -8,6 +8,8 @@
 // @grant        GM_addStyle
 // @grant        unsafeWindow
 // @run-at       document-idle
+// @downloadURL  https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/stocktime-urlopy.user.js
+// @updateURL    https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/stocktime-urlopy.user.js
 // ==/UserScript==
 
 (function () {
