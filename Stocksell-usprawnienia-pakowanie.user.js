@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StockSell - pakiet usprawnień
 // @namespace    http://tampermonkey.net/
-// @version      1.3.3
+// @version      1.3.8
 // @description  Opisy Allegro, podsumowanie batchy, lepsze boxy, analiza Pick bez Pack/Match, etykiety błędów i druk pełnych miejsc magazynowych z ofert.
 // @match        https://stocksell.io/*
 // @match        https://*.stocksell.io/*
@@ -10,12 +10,140 @@
 // @grant        GM_addStyle
 // @grant        unsafeWindow
 // @connect      allegro.pl
+// @connect      127.0.0.1
 // @downloadURL  https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Stocksell-usprawnienia-pakowanie.user.js
 // @updateURL    https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Stocksell-usprawnienia-pakowanie.user.js
 // ==/UserScript==
 
 (function () {
     'use strict';
+
+    // ESTILA PINK CONTROL BEGIN
+    // One workstation state, shared by both packing pages and the local panel.
+    (function estilaPinkControlModule() {
+        const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+        if (pageWindow.top !== pageWindow.self) return;
+        const localBase = 'http://127.0.0.1:17843';
+        const paths = new Set(['/packing/batch/packing-singles', '/packing/batch/packing']);
+        let enabled = null, busy = false, revision = 0, reading = false;
+        let lastPoll = 0;
+        const box = document.createElement('span');
+        box.id = 'ss-suite-pink-control';
+        const inlineStyle = 'display:inline-flex;align-items:center;flex-wrap:wrap;gap:10px;margin:8px 0 8px 16px;vertical-align:middle;font-size:13px;';
+        const floatingStyle = 'display:flex;align-items:center;flex-wrap:wrap;gap:10px;position:fixed;right:24px;bottom:40px;z-index:999998;max-width:calc(100vw - 60px);padding:12px;background:white;border:1px solid #d9c3cc;border-radius:6px;box-shadow:0 2px 8px #0002;font-size:13px;';
+        let placement = '';
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.setAttribute('role', 'switch');
+        toggle.setAttribute('aria-label', 'Automatyczne drukowanie różowych etykiet');
+        toggle.style.cssText = 'padding:10px 14px;border:0;border-radius:4px;color:#fff;background:#626975;font:600 13px Arial,sans-serif;cursor:pointer;min-width:190px;';
+        const settings = document.createElement('a');
+        settings.textContent = 'Ustawienia';
+        settings.href = localBase + '/settings';
+        settings.target = '_blank';
+        settings.rel = 'noopener noreferrer';
+        settings.style.cssText = 'color:#982653;text-decoration:underline;';
+        const detail = document.createElement('span');
+        detail.setAttribute('role', 'status');
+        detail.style.cssText = 'max-width:350px;color:#596170;';
+        box.append(toggle, settings, detail);
+        GM_addStyle('@media print { #ss-suite-pink-control { display:none !important; } }');
+
+        function paint(value, error = '') {
+            enabled = value;
+            toggle.disabled = busy || value === null;
+            toggle.setAttribute('aria-checked', String(value === true));
+            toggle.textContent = busy ? 'Zapisywanie…' : value === null ? 'Różowe: brak połączenia' : value ? 'Różowe: WŁĄCZONE' : 'Różowe: WYŁĄCZONE';
+            toggle.style.background = value === true ? '#ac285b' : '#626975';
+            toggle.title = 'Zmiana dotyczy wszystkich wydruków na tym stanowisku. Kliknij, aby przełączyć.';
+            detail.textContent = error;
+        }
+        function request(data) {
+            return new Promise((resolve, reject) => {
+                GM_xmlhttpRequest({
+                    method: data ? 'POST' : 'GET',
+                    url: localBase + '/api/browser/automation',
+                    headers: { 'Content-Type': 'application/json', 'X-Estila-Client': 'stocksell-tampermonkey' },
+                    data: data ? JSON.stringify(data) : undefined,
+                    timeout: 5000,
+                    onload(response) {
+                        try {
+                            if (response.status !== 200) throw Error('Zaktualizuj Estila Print do wersji 2.1 i odśwież stronę.');
+                            const value = JSON.parse(response.responseText);
+                            if (typeof value.auto_enabled !== 'boolean') throw Error('Wymagana aktualizacja Estila Print do wersji 2.1.');
+                            resolve(value);
+                        } catch (error) { reject(error); }
+                    },
+                    onerror: () => reject(Error('Uruchom Estila Print na tym komputerze.')),
+                    ontimeout: () => reject(Error('Brak odpowiedzi Estila Print. Sprawdź program na tym komputerze.'))
+                });
+            });
+        }
+        async function refresh() {
+            if (busy || reading || !box.isConnected) return;
+            reading = true;
+            const current = revision;
+            try {
+                const value = await request();
+                if (current === revision && !busy) paint(value.auto_enabled, value.auto_enabled && !value.ready ? value.message : '');
+            } catch (error) {
+                if (current === revision && !busy) paint(null, error.message);
+            } finally { reading = false; }
+        }
+        toggle.addEventListener('click', async event => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (busy || enabled === null) return;
+            const target = !enabled;
+            busy = true;
+            revision++;
+            paint(enabled);
+            try {
+                const value = await request({ enabled: target });
+                busy = false;
+                paint(value.auto_enabled, value.auto_enabled && !value.ready ? value.message : '');
+            } catch (error) {
+                busy = false;
+                paint(null, 'Nie potwierdzono zmiany. ' + error.message);
+                lastPoll = 0;
+            }
+        });
+        function update() {
+            if (!paths.has(location.pathname.replace(/\/$/, ''))) {
+                box.remove();
+                return;
+            }
+            const normalize = text => (text || '').normalize('NFD').replace(/[\u0300-\u036f\u200b-\u200d\ufeff]/g, '')
+                .replace(/ł/gi, 'l').toLowerCase().replace(/\s+/g, ' ').trim();
+            const controls = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+            const printButton = controls.find(button => !box.contains(button) &&
+                /\b(?:wydrukuj|drukuj)\s+ostatni\w*\s+etykiet\w*/.test(normalize(button.textContent)) &&
+                button.getClientRects().length > 0);
+            const scanButton = controls.find(button => normalize(button.textContent) === 'skanuj' && button.getClientRects().length > 0);
+            const card = scanButton?.closest('mat-card, .mat-card');
+            const nextPlacement = printButton || card ? 'inline' : 'floating';
+            if (placement !== nextPlacement) {
+                placement = nextPlacement;
+                box.style.cssText = placement === 'inline' ? inlineStyle : floatingStyle;
+            }
+            if (printButton) {
+                if (printButton.nextElementSibling !== box) printButton.insertAdjacentElement('afterend', box);
+            } else if (card) {
+                if (box.parentElement !== card) card.appendChild(box);
+            } else if (document.body && box.parentElement !== document.body) {
+                document.body.appendChild(box);
+            }
+            if (Date.now() - lastPoll >= 2500) {
+                lastPoll = Date.now();
+                refresh();
+            }
+        }
+        paint(null, 'Łączenie z Estila Print…');
+        update();
+        setInterval(update, 500); // StockSell changes routes/components without a full reload.
+        window.addEventListener('focus', () => { lastPoll = 0; update(); });
+    })();
+    // ESTILA PINK CONTROL END
 
     const SELECTORS = {
         scanInput: 'input.mat-input-element, input[autofocus]',
@@ -291,7 +419,66 @@
             return 'batchy';
         }
 
-        function renderBatchSummary(grouped, remainingByBatchAndZone, p3BatchesPerWorker) {
+        function appendWorkerTotals(container, totals) {
+            const section = document.createElement('section');
+            section.id = 'stocksell-worker-totals';
+            section.style.cssText = 'border-top:2px solid #e0e0e0;padding-top:15px;';
+            const heading = document.createElement('div');
+            heading.textContent = '👥 Zebrane łącznie — wszystkie piętra:';
+            heading.style.cssText = 'font-size:16px;font-weight:bold;color:#1565c0;margin-bottom:10px;';
+            section.appendChild(heading);
+
+            const hint = document.createElement('p');
+            hint.style.cssText = 'font-size:13px;color:#546e7a;margin:0 0 12px;';
+            hint.textContent = 'Na podstawie pobranego CSV, bez batchy nierozpoczętych. Batch liczony raz na osobę, jeśli zebrała w nim produkty, również gdy zbierała na kilku piętrach. Produkty: liczba pozycji oznaczonych jako spickowane.';
+            section.appendChild(hint);
+
+            if (totals.missingColumns.length) {
+                const warning = document.createElement('div');
+                warning.textContent = `Nie można obliczyć podsumowania: w CSV brakuje kolumn: ${totals.missingColumns.join(', ')}.`;
+                warning.style.color = '#9a5300';
+                section.appendChild(warning);
+            } else {
+                const workers = Array.from(totals.workers.values()).sort((a, b) =>
+                    a.products - b.products || a.email.localeCompare(b.email, 'pl'));
+                if (!workers.length) {
+                    const empty = document.createElement('div');
+                    empty.textContent = 'Brak spickowanych produktów z przypisaną osobą i batchem w tym CSV.';
+                    empty.style.color = '#546e7a';
+                    section.appendChild(empty);
+                } else {
+                    const list = document.createElement('div');
+                    list.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
+                    for (const worker of workers) {
+                        const row = document.createElement('div');
+                        row.className = 'ss-worker-total';
+                        row.style.cssText = 'background:#e3f2fd;padding:8px 12px;border-radius:6px;border:1px solid #90caf9;font-size:14px;color:#0d47a1;overflow-wrap:anywhere;';
+                        const name = document.createElement('strong');
+                        name.className = 'ss-worker-email';
+                        name.textContent = worker.email;
+                        const batches = document.createElement('span');
+                        batches.className = 'ss-worker-batches';
+                        batches.textContent = `${worker.batches.size} ${getBatchWord(worker.batches.size)}`;
+                        const products = document.createElement('strong');
+                        products.className = 'ss-worker-products';
+                        products.textContent = `${worker.products} szt.`;
+                        row.append(name, document.createTextNode(' — '), batches, document.createTextNode(' | Łącznie produktów: '), products);
+                        list.appendChild(row);
+                    }
+                    section.appendChild(list);
+                }
+                if (totals.unassigned || totals.unknownStates) {
+                    const warning = document.createElement('p');
+                    warning.className = 'ss-worker-totals-warning';
+                    warning.style.cssText = 'font-size:13px;color:#9a5300;margin:10px 0 0;';
+                    warning.textContent = `Nie doliczono: ${totals.unassigned} spickowanych pozycji bez osoby lub batcha; ${totals.unknownStates} pozycji z nierozpoznanym lub pustym stanem.`;
+                    section.appendChild(warning);
+                }
+            }
+            container.appendChild(section);
+        }
+
+        function renderBatchSummary(grouped, remainingByBatchAndZone, p3BatchesPerWorker, workerTotals) {
             let container = document.getElementById('stocksell-strefy-summary');
             if (!container) {
                 const card = document.querySelector('app-batch-list mat-card');
@@ -386,17 +573,57 @@
             }
 
             container.innerHTML = html + '</div></div>';
+            appendWorkerTotals(container, workerTotals);
+        }
+
+        function parseBatchCsv(text, separator) {
+            const rows = [];
+            let row = [], cell = '', quoted = false;
+            const finishRow = () => {
+                row.push(cell.trim());
+                if (row.some(value => value !== '')) rows.push(row);
+                row = [];
+                cell = '';
+            };
+            for (let index = 0; index < text.length; index++) {
+                const char = text[index];
+                if (char === '"') {
+                    if (quoted && text[index + 1] === '"') {
+                        cell += '"';
+                        index++;
+                    } else if (quoted) {
+                        quoted = false;
+                    } else if (cell.trim() === '') {
+                        // Cudzysłów otwiera cytowane pole tylko na jego początku.
+                        quoted = true;
+                        cell = '';
+                    } else {
+                        // Eksport StockSell może zawierać np. 14" w niecytowanym tytule.
+                        cell += char;
+                    }
+                } else if (!quoted && char === separator) {
+                    row.push(cell.trim());
+                    cell = '';
+                } else if (!quoted && (char === '\r' || char === '\n')) {
+                    finishRow();
+                    if (char === '\r' && text[index + 1] === '\n') index++;
+                } else {
+                    cell += char;
+                }
+            }
+            if (quoted) return [];
+            finishRow();
+            return rows;
         }
 
         function analyzeCsv(csvText) {
             if (typeof csvText !== 'string') return false;
 
             const cleanText = csvText.replace(/^\uFEFF/, '');
-            const lines = cleanText.split(/\r?\n/);
-            if (!lines.length) return false;
-
-            const separator = lines[0].includes(';') ? ';' : ',';
-            const headers = lines[0].split(separator)
+            const separator = cleanText.split(/\r?\n/, 1)[0].includes(';') ? ';' : ',';
+            const rows = parseBatchCsv(cleanText, separator);
+            if (!rows.length) return false;
+            const headers = rows[0]
                 .map(header => header.trim().replace(/["']/g, '').toLowerCase());
 
             const zoneIndex = headers.findIndex(header => header.includes('strefy') || header.includes('strefa'));
@@ -411,11 +638,14 @@
             const grouped = {};
             const remainingByBatchAndZone = {};
             const p3BatchesPerWorker = {};
+            const workerTotals = {
+                workers: new Map(), unassigned: 0, unknownStates: 0,
+                missingColumns: [emailIndex === -1 ? 'Email' : '', stateIndex === -1 ? 'Stan' : '', statusIndex === -1 ? 'Status' : ''].filter(Boolean)
+            };
             let remainingCounter = 0;
 
-            for (let rowIndex = 1; rowIndex < lines.length; rowIndex++) {
-                if (!lines[rowIndex].trim()) continue;
-                const columns = lines[rowIndex].split(separator);
+            for (let rowIndex = 1; rowIndex < rows.length; rowIndex++) {
+                const columns = rows[rowIndex];
 
                 const state = stateIndex !== -1 && columns.length > stateIndex
                     ? columns[stateIndex].trim().toLowerCase()
@@ -426,6 +656,30 @@
                 const zone = columns[zoneIndex]?.trim();
                 const status = statusIndex !== -1 ? (columns[statusIndex] || '').trim().toLowerCase() : '';
                 const email = emailIndex !== -1 ? columns[emailIndex]?.trim() : '';
+                const notStarted = /\bnie\s*rozpocz/.test(status.replace(/\s+/g, ' '));
+
+                // Sumujemy zebrane pozycje przed filtrowaniem zakonczonych/pakowanych batchy.
+                // Brak stanu nie jest potwierdzeniem zebrania produktu.
+                if (!workerTotals.missingColumns.length && !notStarted) {
+                    const normalizedState = state.replace(/\s+/g, ' ').trim();
+                    const picked = /^spickowan[yae](?:$|\s|\()/i.test(normalizedState);
+                    const notPicked = /^nie\s*spickowan[yae](?:$|\s|\()/i.test(normalizedState);
+                    if (picked) {
+                        if (email && batch) {
+                            const workerKey = email.toLowerCase();
+                            if (!workerTotals.workers.has(workerKey)) {
+                                workerTotals.workers.set(workerKey, { email, batches: new Set(), products: 0 });
+                            }
+                            const worker = workerTotals.workers.get(workerKey);
+                            worker.batches.add(batch);
+                            worker.products++;
+                        } else {
+                            workerTotals.unassigned++;
+                        }
+                    } else if (!notPicked) {
+                        workerTotals.unknownStates++;
+                    }
+                }
 
                 if (zone?.toUpperCase() === 'P3' && email && batch) {
                     const collected = status.includes('zako') ||
@@ -461,14 +715,48 @@
             }
 
             globalCsvRemaining = remainingCounter;
-            renderBatchSummary(grouped, remainingByBatchAndZone, p3BatchesPerWorker);
+            renderBatchSummary(grouped, remainingByBatchAndZone, p3BatchesPerWorker, workerTotals);
             updateBatchHeading();
             return true;
         }
 
-        function readCsvBlob(blob) {
+        function showCsvImportStatus(message, failed = false) {
+            const button = document.getElementById('btn-awaryjny-csv');
+            if (!button) return;
+            let status = document.getElementById('ss-batch-csv-status');
+            if (!status) {
+                status = document.createElement('div');
+                status.id = 'ss-batch-csv-status';
+                status.setAttribute('role', 'status');
+                status.style.cssText = 'font-size:13px;margin-top:8px;';
+                button.parentNode.appendChild(status);
+            }
+            status.textContent = message;
+            status.style.color = failed ? '#b71c1c' : '#2e7d32';
+        }
+
+        function readCsvBlob(blob, manual = false) {
             const reader = new FileReader();
-            reader.onload = () => analyzeCsv(reader.result);
+            const reportFailure = () => {
+                if (!manual) return;
+                globalCsvRemaining = null;
+                document.getElementById('stocksell-strefy-summary')?.remove();
+                updateBatchHeading();
+                showCsvImportStatus('Nie udało się przeliczyć CSV. Sprawdź, czy wybrano plik z zawartością batchy, z kolumnami strefy i numeru batcha, i czy nie jest uszkodzony.', true);
+            };
+            reader.onload = () => {
+                try {
+                    if (analyzeCsv(reader.result)) {
+                        showCsvImportStatus('CSV przeliczony. Podsumowanie znajduje się pod listą batchy.');
+                    } else {
+                        reportFailure();
+                    }
+                } catch (error) {
+                    console.warn('[StockSell Suite] Nie udało się przeliczyć CSV.', error);
+                    reportFailure();
+                }
+            };
+            reader.onerror = reportFailure;
             reader.readAsText(blob, 'Windows-1250');
         }
 
@@ -507,7 +795,7 @@
             input.addEventListener('change', event => {
                 const file = event.target.files?.[0];
                 if (!file) return;
-                readCsvBlob(file);
+                readCsvBlob(file, true);
                 event.target.value = '';
             });
 
@@ -1307,7 +1595,7 @@
     // MODUŁ 6: etykieta błędu zamówienia 100 x 150 mm z kodem Code 128
     // ---------------------------------------------------------------------
     (function orderErrorLabelModule() {
-        const LABEL_VERSION = '1.3.3';
+        const LABEL_VERSION = '1.3.8';
         const CODE_128_PATTERNS = [
             '212222', '222122', '222221', '121223', '121322', '131222',
             '122213', '122312', '132212', '221213', '221312', '231212',
