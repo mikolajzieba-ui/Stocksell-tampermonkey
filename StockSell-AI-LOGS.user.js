@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StockSell AI -> Google Sheets (Dynamiczne Kategorie)
 // @namespace    http://tampermonkey.net/
-// @version      3.1.2
+// @version      3.1.3
 // @description  Logi AI do dotychczasowego arkusza oraz rejestrator poprawek Estila z zatwierdzaniem stanowisk.
 // @match https://stocksell.io/*
 // @match https://*.stocksell.io/*
@@ -21,7 +21,7 @@
 
 (function(){
 'use strict';
-const BOOT='__estilaStocksellAiRecorderCombined312';
+const BOOT='__estilaStocksellAiRecorderCombined313';
 if(globalThis[BOOT]===true)return;
 Object.defineProperty(globalThis,BOOT,{value:true,configurable:false});
 let sheetsStarted=false;
@@ -33,7 +33,7 @@ function startSheets(){
 (function() {
     'use strict';
 
-    const GOOGLE_MACRO_URL = 'https://example.invalid/ai-test';
+    const GOOGLE_MACRO_URL = 'https://script.google.com/macros/s/AKfycbw9m-nG6Jw4tM6y78ZOWZughJxS0jY-tuJR4UhftrhzObzQZcuTCdEF2yrSdZoqiaDP/exec';
 
     let lastKnownUser = 'Nieznany użytkownik';
     let currentSessionId = null;
