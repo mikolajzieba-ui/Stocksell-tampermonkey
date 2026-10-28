@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StockSell AI -> Google Sheets (Dynamiczne Kategorie)
 // @namespace    http://tampermonkey.net/
-// @version      3.1.1
+// @version      3.1.2
 // @description  Logi AI do dotychczasowego arkusza oraz rejestrator poprawek Estila z zatwierdzaniem stanowisk.
 // @match https://stocksell.io/*
 // @match https://*.stocksell.io/*
@@ -21,7 +21,7 @@
 
 (function(){
 'use strict';
-const BOOT='__estilaStocksellAiRecorderCombined311';
+const BOOT='__estilaStocksellAiRecorderCombined312';
 if(globalThis[BOOT]===true)return;
 Object.defineProperty(globalThis,BOOT,{value:true,configurable:false});
 let sheetsStarted=false;
@@ -33,7 +33,7 @@ function startSheets(){
 (function() {
     'use strict';
 
-    const GOOGLE_MACRO_URL = 'https://script.google.com/macros/s/AKfycbw9m-nG6Jw4tM6y78ZOWZughJxS0jY-tuJR4UhftrhzObzQZcuTCdEF2yrSdZoqiaDP/exec';
+    const GOOGLE_MACRO_URL = 'https://example.invalid/ai-test';
 
     let lastKnownUser = 'Nieznany użytkownik';
     let currentSessionId = null;
@@ -565,7 +565,7 @@ const scope={crypto};
     const core=deps.core,store=deps.store,makeId=deps.uuid||(()=>root.crypto.randomUUID());
     const uuid=()=>{const id=String(makeId());if(!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id))throw new TypeError('Nieprawidłowy identyfikator dokumentu.');return id.toLowerCase();};
     const sourceId=uuid();
-    const retentionMs=15*60*1000,limit=Math.min(8500000,Number.isFinite(deps.saveLimitBytes)&&deps.saveLimitBytes>0?deps.saveLimitBytes:8500000);
+    const limit=Math.min(8500000,Number.isFinite(deps.saveLimitBytes)&&deps.saveLimitBytes>0?deps.saveLimitBytes:8500000);
     const now=()=>{const value=typeof deps.clock==='function'?deps.clock():Date.now();const date=new Date(value);return Number.isFinite(date.getTime())?date.toISOString():new Date().toISOString();};
     let cleanupDiagnostic=null,lastMaintenanceAt=-Infinity;
     let local={version:1,sourceId,generation:0,currentCaseId:null,currentProductId:null,db:core.newStore(),revisions:{},diagnostic:null,halted:false,updatedAt:now()},queue=Promise.resolve(),syncState=null;
@@ -588,29 +588,44 @@ const scope={crypto};
       }
       return {shards:[...latest.values()],generations,errors};
     }
+    // Keep the live baseline in RAM; persistent storage contains only unacknowledged revisions.
+    async function persistentProjection(value){
+      const removed=new Set();
+      for(const record of value.db.cases){
+        const meta=value.revisions[record.caseId],ack=await store.get(ACK+encodeURIComponent(record.caseId),null);
+        if(meta&&ack?.revision===meta.revision&&meta.revision===await revision(record))removed.add(record.caseId);
+      }
+      if(!removed.size)return {value,changed:false};
+      const projected=clone(value);projected.db.cases=projected.db.cases.filter(record=>!removed.has(record.caseId));
+      for(const id of removed)delete projected.revisions[id];
+      for(const [key,context]of Object.entries(projected.db.contexts||{}))if(removed.has(context.caseId))delete projected.db.contexts[key];
+      if(removed.has(projected.currentCaseId)){projected.currentCaseId=null;projected.currentProductId=null;}
+      return {value:projected,changed:true};
+    }
     async function collectGarbage(){
-      if(typeof store.remove!=='function')return;
       const view=await allShards();if(view.errors.length)return;
       const latest=new Map(view.shards.map(shard=>[shard.value.sourceId,shard])),validLatest=new Map();
       for(const shard of view.shards){let valid=true;for(const record of shard.value.db.cases){const meta=shard.value.revisions[record.caseId];if(!meta||meta.revision!==await revision(record)||!Number.isSafeInteger(meta.sequence)){valid=false;break;}}validLatest.set(shard.value.sourceId,valid);}
       for(const entry of view.generations){
         if(!validLatest.get(entry.value.sourceId)){cleanupDiagnostic='Nie potwierdzono rewizji generacji. Nie usunięto danych.';continue;}
-        const newest=latest.get(entry.value.sourceId);let removable=entry.value.generation<newest.value.generation;
-        if(!removable&&entry.value.sourceId!==sourceId&&Date.parse(now())-Date.parse(entry.value.updatedAt)>=retentionMs){
-          removable=true;
-          for(const record of entry.value.db.cases){const meta=entry.value.revisions[record.caseId],ack=await store.get(ACK+encodeURIComponent(record.caseId),null);if(!meta||ack?.revision!==meta.revision){removable=false;break;}}
+        const newest=latest.get(entry.value.sourceId);
+        if(entry.value.generation<newest.value.generation&&typeof store.remove==='function'){
+          try{await store.remove(entry.key);continue;}catch{cleanupDiagnostic='Sprzątanie potwierdzonych generacji wymaga ponowienia; logi pozostały w magazynie.';}
         }
-        if(removable)try{await store.remove(entry.key);}catch{cleanupDiagnostic='Sprzątanie potwierdzonych generacji wymaga ponowienia; logi pozostały w magazynie.';}
+        const projection=await persistentProjection(entry.value);if(!projection.changed)continue;
+        // Generations are immutable for their owner. Do not overwrite another cleaner's result.
+        const current=await store.get(entry.key,null);if(JSON.stringify(current)!==JSON.stringify(entry.value))continue;
+        try{await store.set(entry.key,projection.value);}catch{cleanupDiagnostic='Nie udało się usunąć potwierdzonej kopii lokalnej. Sprzątanie zostanie ponowione.';}
+        // Keep the empty highest generation as a small tombstone, so an old copy cannot become latest.
       }
     }
     async function pruneOwned(next){
-      const removed=new Set(),time=Date.parse(now());
+      const removed=new Set();
       for(const record of next.db.cases){
         if(record.caseId===next.currentCaseId||record.attempts?.some(attempt=>!attempt.finishedAt))continue;
         const meta=next.revisions[record.caseId],ack=await store.get(ACK+encodeURIComponent(record.caseId),null);
         const explicitlyCleared=meta&&await store.get(clearKey(record.caseId,meta.revision),null);
-        const expired=meta&&ack?.revision===meta.revision&&time-Date.parse(ack.at)>=retentionMs&&time-Date.parse(meta.changedAt)>=retentionMs;
-        if(explicitlyCleared||expired)removed.add(record.caseId);
+        if(explicitlyCleared||(meta&&ack?.revision===meta.revision))removed.add(record.caseId);
       }
       if(!removed.size)return false;
       next.db.cases=next.db.cases.filter(record=>!removed.has(record.caseId));for(const id of removed)delete next.revisions[id];
@@ -665,8 +680,9 @@ const scope={crypto};
       const {shards,errors}=await allShards();if(errors.length)throw new Error('damaged_storage');
       next.generation=local.generation+1;if(!Number.isSafeInteger(next.generation))throw new Error('generation_limit');
       const name=SHARD+sourceId+'.'+String(next.generation).padStart(16,'0')+'.'+String(uuid());
-      const total=shards.filter(shard=>shard.value.sourceId!==sourceId).reduce((sum,shard)=>sum+bytes(shard.value),0)+bytes(next);
-      if(total>limit)throw new Error('storage_limit');await store.set(name,next);local=next;await collectGarbage();
+      const persisted=(await persistentProjection(next)).value;
+      const total=shards.filter(shard=>shard.value.sourceId!==sourceId).reduce((sum,shard)=>sum+bytes(shard.value),0)+bytes(persisted);
+      if(total>limit)throw new Error('storage_limit');await store.set(name,persisted);local=next;await collectGarbage();
     }
     async function failStorage(){
       local.halted=true;local.diagnostic='Brak miejsca lub błąd zapisu logów. Rejestrowanie zatrzymano; wcześniejsze dane pozostały. Wyeksportuj logi i sprawdź magazyn.';
@@ -697,11 +713,12 @@ const scope={crypto};
     }
     async function acknowledgeInternal(caseId,rev){
       if(typeof caseId!=='string'||typeof rev!=='string'||!/^[a-f0-9]{64}$/.test(rev))return {ok:false,error:'Nieprawidłowe potwierdzenie.'};
-      const view=await merged();const item=view.items.find(item=>item.caseId===caseId);if(!item)return {ok:false,error:'Nie znaleziono lokalnego logu.'};
-      const sequence=item.revision===rev?item.sequence:item.meta.history?.[rev];if(!Number.isSafeInteger(sequence))return {ok:false,error:'Nieznana rewizja logu.'};
       const name=ACK+encodeURIComponent(caseId),previous=await store.get(name,null);
+      const view=await merged();const item=view.items.find(item=>item.caseId===caseId);if(!item){if(previous?.revision===rev){await collectGarbage();return {ok:true,alreadyAcknowledged:true};}return {ok:false,error:'Nie znaleziono lokalnego logu.'};}
+      const sequence=item.revision===rev?item.sequence:item.meta.history?.[rev];if(!Number.isSafeInteger(sequence))return {ok:false,error:'Nieznana rewizja logu.'};
       if(previous&&Number.isSafeInteger(previous.sequence)&&previous.sequence>sequence)return {ok:true,stale:true};
-      await store.set(name,{caseId,revision:rev,sequence,sourceId:item.sourceId,at:now()});return {ok:true};
+      await store.set(name,{caseId,revision:rev,sequence,sourceId:item.sourceId,at:now()});await collectGarbage();
+      const next=clone(local);if(await pruneOwned(next))local=next;return {ok:true};
     }
     async function clearInternal(message){
       if(!Array.isArray(message.caseIds)||!message.caseIds.length||message.caseIds.some(id=>typeof id!=='string')||new Set(message.caseIds).size!==message.caseIds.length)return {ok:false,error:'Wskaż logi do usunięcia.'};
@@ -994,13 +1011,23 @@ root.StockLogEnrollment=Object.freeze({create,endpoint:ENDPOINT});
 (function(root){
 'use strict';
 const ENDPOINT='https://odlozone.estila.com.pl/recorder-ingest.php';
+// Only fixed application errors may enter the local UI. Never echo arbitrary response bodies.
+const SERVER_ERRORS=new Set(['Pojedynczy log przekracza limit 1 MiB.','Nieprawidłowy JSON.','Nieprawidłowa struktura danych.','Wymagane dane pojedynczego logu i rejestratora.','Nieprawidłowy identyfikator lub rewizja rejestratora.','Automatyczny import wymaga dokładnie jednego przypadku w wersji 2.','Ten identyfikator logu jest już przypisany do innego produktu.','Ta sama kolejność logu ma inną treść. Zachowano wcześniejszy zapis.','Rejestrator wysłał zbyt wiele zmian. Ponów za minutę.','Log jest zbyt rozbudowany. Podziel eksport na mniejsze części.','Nieprawidłowy zapis próby poprawki.','Nieprawidłowa zmiana pola w logu.','Nie udało się zapisać logu rejestratora.']);
 function create(options){
  const runtime=options.runtime,transport=options.transport,keyProvider=options.keyProvider,now=options.now||(()=>Date.now());
- let busy=false,retryAt=0,failures=0;
+ let busy=false,retryAt=0,failures=0,cursor=null;
  const report=async(state,message)=>runtime.request({type:'sync-status',state,message});
+ const itemKey=item=>String(item.sourceId)+':'+String(item.caseId);
+ const itemRef=item=>String(item.caseId||'').replace(/[^A-Za-z0-9._:-]/g,'').slice(-12)||'nieustalony';
+ const serverError=result=>typeof result?.error==='string'&&SERVER_ERRORS.has(result.error)?result.error:'Serwer nie potwierdził zapisu logu.';
+ function rateDelay(response){
+  const value=/^retry-after:\s*([^\r\n]+)/im.exec(String(response.responseHeaders||''))?.[1]?.trim();
+  const delay=value&&/^\d+$/.test(value)?Number(value)*1000:value?Date.parse(value)-now():60000;
+  return Number.isFinite(delay)?Math.max(1000,Math.min(3600000,delay)):60000;
+ }
  async function tick(){
   if(busy||now()<retryAt)return {ok:false,busy:true};
-  busy=true;
+  busy=true;let sent=0,activeRef=null;
   try{
    const items=await runtime.pending();
    const authorization=await keyProvider({pendingCount:items.length}),key=authorization?.key;
@@ -1009,24 +1036,33 @@ function create(options){
    if(typeof key!=='string'||!/^[a-f0-9]{32}\.[a-f0-9]{64}$/.test(key)){
     await report('missing_key','Brak klucza rejestratora. Nie potwierdzono tożsamości stanowiska. Logi pozostają lokalnie.');return {ok:false,missingKey:true};
    }
-   await report('syncing','Wysyłanie logów w tle…');let sent=0,tooLarge=false;
-   // Bounded batches. Atomic server revisions make duplicate sends safe.
-   for(const item of items.slice(0,5)){
-    const body=JSON.stringify({data:item.data,recorder:{sourceId:item.sourceId,caseId:item.caseId,sequence:item.sequence,revision:item.revision}});
-    if(new TextEncoder().encode(body).length>1048576){await report('error','Jeden log przekracza limit 1 MiB. Pozostał lokalnie; potrzebny eksport do sprawdzenia.');tooLarge=true;continue;}
+   await report('syncing','Wysyłanie logów w tle…');const diagnostics=[];
+   const previous=items.findIndex(item=>itemKey(item)===cursor),start=previous<0?0:(previous+1)%items.length;
+   const batch=Array.from({length:Math.min(5,items.length)},(_,index)=>items[(start+index)%items.length]);
+   const failed=(item,kind,status,message)=>diagnostics.push({caseRef:itemRef(item),kind,httpStatus:Number.isInteger(status)?status:null,message});
+   // Advance before each attempt: a failed item cannot hold the next bounded batch hostage.
+   for(const item of batch){
+    cursor=itemKey(item);activeRef=itemRef(item);
+    let body;try{body=JSON.stringify({data:item.data,recorder:{sourceId:item.sourceId,caseId:item.caseId,sequence:item.sequence,revision:item.revision}});}catch{failed(item,'serialization',null,'Nie udało się przygotować logu.');continue;}
+    if(new TextEncoder().encode(body).length>1048576){failed(item,'too_large',413,'Log przekracza limit 1 MiB i pozostał lokalnie.');continue;}
     const response=await transport({method:'POST',url:ENDPOINT,headers:{'Content-Type':'application/json','Accept':'application/json','X-Recorder-Key':key,'Origin':'https://stocksell.io'},data:body,anonymous:true,timeout:20000});
     let final;try{final=new URL(response.finalUrl||ENDPOINT);}catch{throw new Error('destination');}
     if(final.origin!=='https://odlozone.estila.com.pl'||final.pathname!=='/recorder-ingest.php')throw new Error('destination');
     if(response.status===401||response.status===403){options.invalidate?.();retryAt=now()+60000;await report('key_rejected','Serwer odrzucił klucz rejestratora. Logi pozostają lokalnie; opiekun musi sprawdzić klucz lub dostęp aplikacji.');return {ok:false,unauthorized:true,sent};}
-    let result;try{result=JSON.parse(response.responseText);}catch{throw new Error('invalid_response');}
-    const counts=['imported','updated','skipped'].map(name=>result[name]);
-    if(response.status!==200||result.ok!==true||counts.some(value=>!Number.isInteger(value)||value<0)||counts.reduce((a,b)=>a+b,0)!==1)throw new Error('not_acknowledged');
-    if(!result.recorder||['sourceId','caseId','sequence','revision'].some(name=>result.recorder[name]!==item[name]))throw new Error('wrong_revision_ack');
-    const acknowledged=await runtime.acknowledge(item.caseId,item.revision);if(acknowledged?.ok!==true)throw new Error('local_ack_failed');sent++;
+    if(response.status===429){retryAt=now()+rateDelay(response);await report('error','HTTP 429: serwer ograniczył wysyłkę. Logi pozostają lokalnie; próba zostanie ponowiona.');return {ok:false,rateLimited:true,sent};}
+    let result;try{result=JSON.parse(response.responseText);}catch{failed(item,'invalid_response',response.status,'Nieprawidłowa odpowiedź serwera.');continue;}
+    if(response.status!==200){failed(item,'http',response.status,serverError(result));continue;}
+    const counts=['imported','updated','skipped'].map(name=>result?.[name]);
+    if(result?.ok!==true||counts.some(value=>!Number.isInteger(value)||value<0)||counts.reduce((a,b)=>a+b,0)!==1){failed(item,'not_acknowledged',response.status,'Brak jednoznacznego potwierdzenia odbioru.');continue;}
+    if(!result.recorder||['sourceId','caseId','sequence','revision'].some(name=>result.recorder[name]!==item[name])){failed(item,'wrong_revision_ack',response.status,'Potwierdzenie dotyczy innej rewizji.');continue;}
+    try{const acknowledged=await runtime.acknowledge(item.caseId,item.revision);if(acknowledged?.ok!==true)throw new Error('local_ack_failed');}catch{failed(item,'local_ack_failed',response.status,'Nie zapisano lokalnego potwierdzenia; log pozostał do ponowienia.');continue;}
+    sent++;
    }
-   failures=0;retryAt=0;if(tooLarge){await report('error','Jeden log przekracza limit 1 MiB. Pozostałe przesłano; duży log pozostał lokalnie do eksportu.');return {ok:false,tooLarge:true,sent};}const left=await runtime.pending();await report(left.length?'pending':'synced',left.length?'Kolejne logi czekają na wysłanie.':'Logi przesłano do „Zebranych logów”.');return {ok:true,sent};
+   failures=0;retryAt=0;const left=await runtime.pending();
+   if(diagnostics.length){const first=diagnostics[0];await report('error',`Log ${first.caseRef}${first.httpStatus===null?'':': HTTP '+first.httpStatus}: ${first.message} Niepotwierdzone: ${diagnostics.length}; wysłane w partii: ${sent}. Pozostałe logi będą wysyłane dalej.`);return {ok:false,itemErrors:true,tooLarge:diagnostics.some(item=>item.kind==='too_large'),sent,diagnostics};}
+   await report(left.length?'pending':'synced',left.length?'Kolejne logi czekają na wysłanie.':'Logi przesłano do „Zebranych logów”.');return {ok:true,sent};
   }catch{
-   failures++;retryAt=now()+Math.min(300000,10000*Math.pow(2,Math.min(failures-1,5)));await report('offline','Nie potwierdzono odbioru logów. Dane pozostają lokalnie; wysyłka zostanie ponowiona.');return {ok:false,retry:true};
+   failures++;retryAt=now()+Math.min(300000,10000*Math.pow(2,Math.min(failures-1,5)));await report('offline',`${activeRef?'Log '+activeRef+': ':''}Nie potwierdzono odbioru (błąd połączenia lub obsługi kolejki). Dane pozostają lokalnie; wysyłka zostanie ponowiona.`);return {ok:false,retry:true,sent};
   }finally{busy=false;}
  }
  return Object.freeze({tick,refresh(){retryAt=0;return tick();}});
