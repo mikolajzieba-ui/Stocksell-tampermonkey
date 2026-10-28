@@ -1,16 +1,20 @@
 // ==UserScript==
 // @name         StockSell - pakiet usprawnień
 // @namespace    http://tampermonkey.net/
-// @version      1.3.8
-// @description  Opisy Allegro, podsumowanie batchy, lepsze boxy, analiza Pick bez Pack/Match, etykiety błędów i druk pełnych miejsc magazynowych z ofert.
+// @version      1.6.4
+// @description  Opisy Allegro, podsumowanie batchy, lepsze boxy, analiza Pick bez Pack/Match, etykiety błędów i druk pełnych miejsc magazynowych z ofert. Obsługa OLX tymczasowo wyłączona.
 // @match        https://stocksell.io/*
 // @match        https://*.stocksell.io/*
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
 // @grant        unsafeWindow
 // @connect      allegro.pl
-// @connect      127.0.0.1
+// @connect      estila.com.pl
+// @connect      olx.estila.com.pl
 // @downloadURL  https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Stocksell-usprawnienia-pakowanie.user.js
 // @updateURL    https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Stocksell-usprawnienia-pakowanie.user.js
 // ==/UserScript==
@@ -18,132 +22,265 @@
 (function () {
     'use strict';
 
-    // ESTILA PINK CONTROL BEGIN
-    // One workstation state, shared by both packing pages and the local panel.
-    (function estilaPinkControlModule() {
-        const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-        if (pageWindow.top !== pageWindow.self) return;
-        const localBase = 'http://127.0.0.1:17843';
-        const paths = new Set(['/packing/batch/packing-singles', '/packing/batch/packing']);
-        let enabled = null, busy = false, revision = 0, reading = false;
-        let lastPoll = 0;
-        const box = document.createElement('span');
-        box.id = 'ss-suite-pink-control';
-        const inlineStyle = 'display:inline-flex;align-items:center;flex-wrap:wrap;gap:10px;margin:8px 0 8px 16px;vertical-align:middle;font-size:13px;';
-        const floatingStyle = 'display:flex;align-items:center;flex-wrap:wrap;gap:10px;position:fixed;right:24px;bottom:40px;z-index:999998;max-width:calc(100vw - 60px);padding:12px;background:white;border:1px solid #d9c3cc;border-radius:6px;box-shadow:0 2px 8px #0002;font-size:13px;';
-        let placement = '';
-        const toggle = document.createElement('button');
-        toggle.type = 'button';
-        toggle.setAttribute('role', 'switch');
-        toggle.setAttribute('aria-label', 'Automatyczne drukowanie różowych etykiet');
-        toggle.style.cssText = 'padding:10px 14px;border:0;border-radius:4px;color:#fff;background:#626975;font:600 13px Arial,sans-serif;cursor:pointer;min-width:190px;';
-        const settings = document.createElement('a');
-        settings.textContent = 'Ustawienia';
-        settings.href = localBase + '/settings';
-        settings.target = '_blank';
-        settings.rel = 'noopener noreferrer';
-        settings.style.cssText = 'color:#982653;text-decoration:underline;';
-        const detail = document.createElement('span');
-        detail.setAttribute('role', 'status');
-        detail.style.cssText = 'max-width:350px;color:#596170;';
-        box.append(toggle, settings, detail);
-        GM_addStyle('@media print { #ss-suite-pink-control { display:none !important; } }');
-
-        function paint(value, error = '') {
-            enabled = value;
-            toggle.disabled = busy || value === null;
-            toggle.setAttribute('aria-checked', String(value === true));
-            toggle.textContent = busy ? 'Zapisywanie…' : value === null ? 'Różowe: brak połączenia' : value ? 'Różowe: WŁĄCZONE' : 'Różowe: WYŁĄCZONE';
-            toggle.style.background = value === true ? '#ac285b' : '#626975';
-            toggle.title = 'Zmiana dotyczy wszystkich wydruków na tym stanowisku. Kliknij, aby przełączyć.';
-            detail.textContent = error;
-        }
-        function request(data) {
-            return new Promise((resolve, reject) => {
-                GM_xmlhttpRequest({
-                    method: data ? 'POST' : 'GET',
-                    url: localBase + '/api/browser/automation',
-                    headers: { 'Content-Type': 'application/json', 'X-Estila-Client': 'stocksell-tampermonkey' },
-                    data: data ? JSON.stringify(data) : undefined,
-                    timeout: 5000,
-                    onload(response) {
-                        try {
-                            if (response.status !== 200) throw Error('Zaktualizuj Estila Print do wersji 2.1 i odśwież stronę.');
-                            const value = JSON.parse(response.responseText);
-                            if (typeof value.auto_enabled !== 'boolean') throw Error('Wymagana aktualizacja Estila Print do wersji 2.1.');
-                            resolve(value);
-                        } catch (error) { reject(error); }
-                    },
-                    onerror: () => reject(Error('Uruchom Estila Print na tym komputerze.')),
-                    ontimeout: () => reject(Error('Brak odpowiedzi Estila Print. Sprawdź program na tym komputerze.'))
-                });
+    // ESTILA PACKING ASSIGNMENTS BEGIN
+    (function packingAssignmentsModule() {
+        const panelUrl = 'https://estila.com.pl/packing-assignments.php';
+        const tokenKey = 'ss-packing-reader-v1';
+        const storageAvailable = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
+        // Panel uzupełnia ten klucz w jednej kopii skryptu przeznaczonej na wszystkie stanowiska.
+        // Zapis GM zachowuje dostęp także po późniejszej aktualizacji zwykłego pliku wtyczki.
+        const sharedReaderToken = 'c853f916a24dbff4b12ed8a655f8bd94d665f87d29b48a8eb8f81427798a9139';
+        if (storageAvailable && /^[a-f0-9]{64}$/.test(sharedReaderToken)) GM_setValue(tokenKey, sharedReaderToken);
+        const configured = () => storageAvailable && /^[a-f0-9]{64}$/.test(GM_getValue(tokenKey, ''));
+        const pageStarted = Date.now(), sessionKey = 'ss-packing-login-v1', clientKey = 'ss-packing-client-v1', stationKey = 'ss-packing-station-v1';
+        const workDay = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Warsaw', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+        const localStation = () => { const value = Number(GM_getValue(stationKey, 0)); return Number.isInteger(value) && value >= 1 && value <= 5 ? value : 0; };
+        let observedEmail = null, missingSince = null, lastPresence = -Infinity, lastSignature = '', presenceBusy = false, presenceMessage = '';
+        const onPackingPage = () => location.pathname.replace(/\/$/, '') === '/packing/batch/packing';
+        let snapshot = null, expires = 0, lastPoll = -Infinity, busy = false, message = '', generation = 0;
+        const startsKey = 'ss-packing-starts-v1';
+        let startCandidate = null, startsBusy = false, lastStartReport = -Infinity, startsMessage = '';
+        if (storageAvailable && typeof GM_registerMenuCommand === 'function') {
+            GM_registerMenuCommand('⚙ Ustaw stanowisko pakowania', () => {
+                const value = window.prompt('Stanowisko pakowania tego komputera (1–5).\n0 = Bez stanowiska. Numer zapisuje się na stałe w Tampermonkey.', String(localStation()));
+                if (value === null) return;
+                if (!/^[0-5]$/.test(value.trim())) { window.alert('Wpisz numer od 1 do 5 albo 0 (Bez stanowiska).'); return; }
+                const station = Number(value.trim());
+                if (station === localStation()) return;
+                GM_setValue(stationKey, station);
+                const state = GM_getValue(sessionKey, null);
+                if (state) GM_setValue(sessionKey, { ...state, station, day: workDay(), changedAt: Math.max(Date.now(), state.changedAt + 1) });
+                lastPresence = -Infinity; tick();
+            });
+            GM_registerMenuCommand('ℹ Status przydziału paczek', () => {
+                const usable = snapshot && performance.now() < expires;
+                const info = !configured() ? 'Przydział nie jest połączony. Zainstaluj wspólną wtyczkę z panelu Duże paczki.' :
+                    (message || (usable ? (Object.keys(snapshot.owners).length ? 'Przydział jest aktualny.' : 'Brak aktywnych stanowisk w tej chwili.') : 'Otwórz Pakowanie wielosztuk, aby odczytać przydział.'));
+                const conflicts = usable && snapshot.conflicts?.length ? '\nKonflikt obsady stanowisk: ' + snapshot.conflicts.join(', ') + '.' : '';
+                const mode = usable && snapshot.assignmentMode ? '\nTryb: ' + (snapshot.assignmentMode.value === 'balanced' ? 'Strefy z wyrównywaniem' : 'Według stref') + '.' : '';
+                window.alert((localStation() ? 'Stanowisko ' + localStation() : 'Bez stanowiska') + '\n' + info + presenceMessage + startsMessage + mode + conflicts);
             });
         }
-        async function refresh() {
-            if (busy || reading || !box.isConnected) return;
-            reading = true;
-            const current = revision;
-            try {
-                const value = await request();
-                if (current === revision && !busy) paint(value.auto_enabled, value.auto_enabled && !value.ready ? value.message : '');
-            } catch (error) {
-                if (current === revision && !busy) paint(null, error.message);
-            } finally { reading = false; }
+        GM_addStyle(`
+            .courier-tag:has(.ss-packing-assignee) { max-width:calc(100% - 6px); box-sizing:border-box; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+            .courier-tag .ss-packing-assignee { text-transform:none !important; }
+        `);
+        function currentEmail() {
+            // Celowo tylko pole Użytkownik, nigdy mail konta Allegro z tego samego paska.
+            const field = document.querySelector('[data-cy="username"]');
+            if (!field) return '';
+            const value = (field.querySelector('.header')?.textContent || field.textContent.replace(/^\s*Użytkownik:\s*/i, '')).trim().toLowerCase();
+            return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ? value : '';
         }
-        toggle.addEventListener('click', async event => {
-            event.preventDefault();
-            event.stopPropagation();
-            if (busy || enabled === null) return;
-            const target = !enabled;
+        function reportPresence() {
+            if (!configured()) return;
+            const mail = currentEmail(), station = localStation();
+            let state = GM_getValue(sessionKey, null);
+            if (!station && !state) return;
+            const change = email => {
+                state = { email, station, day: workDay(), changedAt: Math.max(Date.now(), (state?.changedAt || 0) + 1) };
+                GM_setValue(sessionKey, state);
+            };
+            if (mail) {
+                missingSince = null;
+                if (observedEmail !== mail) {
+                    // Nowe logowanie/otwarcie strony zapisuje dzisiejszą obsadę.
+                    // Niezmieniona karta pozostawiona przez noc nie odnawia wczorajszego dnia.
+                    if (observedEmail !== null || !state || state.email === mail || state.changedAt < pageStarted) {
+                        if (!state || state.email !== mail || state.day !== workDay() || state.station !== station) change(mail);
+                    }
+                    observedEmail = mail;
+                }
+            } else if (observedEmail) {
+                missingSince ??= performance.now();
+                if (performance.now() - missingSince < 3000) return;
+                if (state?.email === observedEmail) change('');
+                observedEmail = '';
+            }
+            if (!state || observedEmail === null || state.email !== mail || presenceBusy || performance.now() - lastPresence < 5000) return;
+            const signature = state.changedAt + ':' + state.email + ':' + station;
+            if (signature === lastSignature) return;
+            let client = GM_getValue(clientKey, '');
+            if (!/^[a-f0-9]{32}$/.test(client)) {
+                client = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+                GM_setValue(clientKey, client);
+            }
+            const changed = signature !== lastSignature;
+            lastPresence = performance.now(); lastSignature = signature; presenceBusy = true;
+            const token = GM_getValue(tokenKey, '');
+            const finish = ok => { presenceBusy = false; if (!ok) { lastSignature = ''; lastPresence = performance.now(); } };
+            try {
+                GM_xmlhttpRequest({
+                    method: 'POST', url: panelUrl + '?api=presence', anonymous: true, timeout: 10000,
+                    headers: { Authorization: 'Bearer ' + token, 'X-Estila-Packing-Key': token, 'Content-Type': 'application/json' },
+                    data: JSON.stringify({ client, email: station ? state.email : '', station, generation: state.changedAt, day: state.day }),
+                    onload(response) {
+                        finish(response.status === 200);
+                        if (response.status === 200) {
+                            try { presenceMessage = station && mail && JSON.parse(response.responseText).recognized === false ? ' Twój mail StockSell nie jest jeszcze przypisany w panelu.' : ''; } catch {}
+                            if (changed) lastPoll = -Infinity;
+                        }
+                    },
+                    onerror() { finish(false); }, ontimeout() { finish(false); }
+                });
+            } catch { finish(false); }
+        }
+        function boxNames(label) {
+            const suffix = label.querySelector('.batch-suffix')?.textContent || label.textContent.replace(/^\s*Batch\s+\d+\s*/i, '');
+            const parts = suffix.trim().split(/[\s,;/+]+/).map(value => value.toUpperCase().replace('_', ''));
+            if (!parts.length || parts.some(value => !/^[A-T][1-3]$/.test(value))) return [];
+            return [...new Set(parts)];
+        }
+        function startStore() {
+            const value = GM_getValue(startsKey, null), day = workDay();
+            return { queue: (Array.isArray(value?.queue) ? value.queue : []).filter(event => event.day === day),
+                seen: value?.seen && value.day === day && typeof value.seen === 'object' ? value.seen : {}, day };
+        }
+        function captureStart() {
+            if (!configured() || !onPackingPage() || !localStation()) return;
+            const summary = document.querySelector('app-packing-order-summary .packing-order-summary');
+            const heading = summary && [...summary.querySelectorAll('h2')].map(el => el.textContent.trim()).find(text => /^Zamówienie numer:\s*[1-9]\d*\s*$/.test(text));
+            const text = summary?.querySelector('.boxes')?.textContent.trim() || '';
+            const match = text.match(/^Multibox:\s*zeskanuj produkt z boxów:\s*((?:[A-T]_?[1-3]\s*)+)$/);
+            const boxes = match ? [...new Set(match[1].trim().split(/\s+/).map(box => box.replace('_', '')))] : [];
+            const mail = currentEmail();
+            const company = (document.querySelector('.company-name .header')?.textContent || document.querySelector('.company-name')?.textContent || '').replace(/^\s*Firma:\s*/i, '').trim();
+            if (!summary || !summary.getClientRects().length || !heading || boxes.length < 2 || !mail || !company) { startCandidate = null; return; }
+            const order = heading.match(/[1-9]\d*\s*$/)[0].trim();
+            const source = [...summary.querySelectorAll('h2')].some(el => /Zamówienie pochodzące z Outleya!/i.test(el.textContent)) ? 'sylius' : 'baselinker';
+            const identity = JSON.stringify([company.toLowerCase(), source, order]);
+            const signature = JSON.stringify([identity, mail, localStation(), boxes]);
+            if (startCandidate?.signature !== signature) {
+                startCandidate = { signature, identity, day: workDay(), since: performance.now() };
+                // Angular dodaje numer i boxy w jednym odświeżeniu. Krótkie potwierdzenie
+                // zapobiega połączeniu starego numeru z dopiero zmienianą listą boxów.
+                setTimeout(reportStarts, 300); return;
+            }
+            if (startCandidate.day !== workDay() || performance.now() - startCandidate.since < 250) return;
+            const store = startStore();
+            if (Object.hasOwn(store.seen, identity) || store.queue.some(event => event.identity === identity)) return;
+            store.queue.push({ identity, day: startCandidate.day, company, source, order, boxes, email: mail, station: localStation() });
+            GM_setValue(startsKey, store);
+        }
+        function reportStarts() {
+            if (!configured()) return;
+            captureStart();
+            if (startsBusy || performance.now() - lastStartReport < 10000) return;
+            const event = startStore().queue[0]; if (!event) return;
+            startsBusy = true; lastStartReport = performance.now();
+            const token = GM_getValue(tokenKey, '');
+            const failed = () => { startsBusy = false; startsMessage = '\nRozpoczęcie dużej paczki czeka na wysłanie do panelu.'; };
+            try {
+                const { identity, ...input } = event;
+                GM_xmlhttpRequest({
+                    method: 'POST', url: panelUrl + '?api=started', anonymous: true, timeout: 10000,
+                    headers: { Authorization: 'Bearer ' + token, 'X-Estila-Packing-Key': token, 'Content-Type': 'application/json' }, data: JSON.stringify(input),
+                    onload(response) {
+                        try {
+                            if (response.status !== 200 || (response.finalUrl && new URL(response.finalUrl).origin !== new URL(panelUrl).origin)) throw new Error('Response');
+                            const result = JSON.parse(response.responseText);
+                            if (!['recorded', 'duplicate', 'stale', 'unrecognized'].includes(result.status)) throw new Error('Status');
+                            if (result.status === 'unrecognized') {
+                                // Nie blokuj kolejnych osób na tym komputerze, jeśli
+                                // jeden dawny mail nadal wymaga poprawienia w panelu.
+                                const store = startStore(), index = store.queue.findIndex(queued => queued.identity === identity);
+                                if (index >= 0) store.queue.push(...store.queue.splice(index, 1));
+                                GM_setValue(startsKey, store);
+                                failed(); startsMessage = '\nMail pakowacza nie jest powiązany z jedną osobą w panelu. Rozpoczęcie czeka na wysłanie.'; return;
+                            }
+                            const store = startStore();
+                            store.queue = store.queue.filter(queued => queued.identity !== identity);
+                            if (event.day === store.day) store.seen[identity] = true;
+                            GM_setValue(startsKey, store); startsBusy = false; startsMessage = ''; lastPoll = -Infinity;
+                            lastStartReport = -Infinity;
+                        } catch { failed(); }
+                    }, onerror: failed, ontimeout: failed
+                });
+            } catch { failed(); }
+        }
+        function removeAssignment(box) {
+            box.querySelectorAll('.ss-packing-assignee, .ss-packing-own-tag').forEach(element => element.remove());
+        }
+        function render() {
+            const usable = onPackingPage() && snapshot && performance.now() < expires;
+            document.querySelectorAll('app-consolidated-orders .box').forEach(box => {
+                const label = box.querySelector('.order-name');
+                const names = label ? boxNames(label) : [];
+                const owner = usable && names.length > 1 ? (snapshot.packingOwners || snapshot.owners)[names[0]] : null;
+                if (!owner) { removeAssignment(box); return; }
+                let tag = box.querySelector('.courier-tag');
+                if (!tag) {
+                    tag = document.createElement('span');
+                    tag.className = 'courier-tag ss-packing-own-tag';
+                    box.appendChild(tag);
+                }
+                let annotation = tag.querySelector('.ss-packing-assignee');
+                if (!annotation) {
+                    annotation = document.createElement('span');
+                    annotation.className = 'ss-packing-assignee';
+                    tag.appendChild(annotation);
+                }
+                const courier = Array.from(tag.childNodes).filter(node => node !== annotation).map(node => node.textContent).join('').trim();
+                const name = (courier ? ' - ' : '') + owner.name;
+                if (annotation.textContent !== name) annotation.textContent = name;
+                annotation.title = `Stanowisko ${owner.station} · pierwszy box ${names[0]}` + (snapshot.assignmentMode?.value === 'balanced' && snapshot.owners[names[0]]?.station !== owner.station ? ' · wyrównywanie dużych paczek' : '');
+            });
+        }
+        function poll() {
+            if (!onPackingPage() || busy || performance.now() - lastPoll < 15000) return;
+            lastPoll = performance.now();
+            const token = storageAvailable ? GM_getValue(tokenKey, '') : '';
+            if (!/^[a-f0-9]{64}$/.test(token)) { snapshot = null; message = ''; render(); return; }
             busy = true;
-            revision++;
-            paint(enabled);
+            const requestGeneration = ++generation, started = performance.now();
+            const failed = reason => {
+                if (requestGeneration !== generation) return;
+                busy = false; message = reason; render();
+            };
             try {
-                const value = await request({ enabled: target });
-                busy = false;
-                paint(value.auto_enabled, value.auto_enabled && !value.ready ? value.message : '');
-            } catch (error) {
-                busy = false;
-                paint(null, 'Nie potwierdzono zmiany. ' + error.message);
-                lastPoll = 0;
-            }
-        });
-        function update() {
-            if (!paths.has(location.pathname.replace(/\/$/, ''))) {
-                box.remove();
-                return;
-            }
-            const normalize = text => (text || '').normalize('NFD').replace(/[\u0300-\u036f\u200b-\u200d\ufeff]/g, '')
-                .replace(/ł/gi, 'l').toLowerCase().replace(/\s+/g, ' ').trim();
-            const controls = Array.from(document.querySelectorAll('button, a, [role="button"]'));
-            const printButton = controls.find(button => !box.contains(button) &&
-                /\b(?:wydrukuj|drukuj)\s+ostatni\w*\s+etykiet\w*/.test(normalize(button.textContent)) &&
-                button.getClientRects().length > 0);
-            const scanButton = controls.find(button => normalize(button.textContent) === 'skanuj' && button.getClientRects().length > 0);
-            const card = scanButton?.closest('mat-card, .mat-card');
-            const nextPlacement = printButton || card ? 'inline' : 'floating';
-            if (placement !== nextPlacement) {
-                placement = nextPlacement;
-                box.style.cssText = placement === 'inline' ? inlineStyle : floatingStyle;
-            }
-            if (printButton) {
-                if (printButton.nextElementSibling !== box) printButton.insertAdjacentElement('afterend', box);
-            } else if (card) {
-                if (box.parentElement !== card) card.appendChild(box);
-            } else if (document.body && box.parentElement !== document.body) {
-                document.body.appendChild(box);
-            }
-            if (Date.now() - lastPoll >= 2500) {
-                lastPoll = Date.now();
-                refresh();
-            }
+                GM_xmlhttpRequest({
+                    method: 'GET', url: panelUrl + '?api=today', anonymous: true,
+                    headers: { Authorization: 'Bearer ' + token, 'X-Estila-Packing-Key': token, Accept: 'application/json' }, timeout: 12000,
+                    onload(response) {
+                        if (requestGeneration !== generation) return;
+                        if (response.status === 401 || response.status === 403) {
+                            snapshot = null; expires = 0;
+                            failed('Duże paczki: brak dostępu. Zainstaluj aktualną wspólną wtyczkę z panelu.'); return;
+                        }
+                        try {
+                            if (response.status !== 200) throw new Error('HTTP');
+                            if (response.finalUrl && new URL(response.finalUrl).origin !== new URL(panelUrl).origin) throw new Error('Origin');
+                            const data = JSON.parse(response.responseText);
+                            if (data.format !== 'estila-packing-v1' || !data.owners || typeof data.owners !== 'object' || Array.isArray(data.owners) || !Number.isFinite(data.serverTime) || !Number.isFinite(data.validUntil) || data.validUntil <= data.serverTime) throw new Error('Format');
+                            const entries = Object.entries(data.owners);
+                            if (entries.length !== 0 && entries.length !== 60) throw new Error('Incomplete');
+                            if (entries.some(([key, owner]) => !/^[A-T][1-3]$/.test(key) || !owner || !Number.isInteger(owner.station) || owner.station < 1 || owner.station > 5 || typeof owner.name !== 'string' || !owner.name.trim() || owner.name.length > 120)) throw new Error('Owners');
+                            if (data.packingOwners !== undefined) {
+                                const routed = data.packingOwners;
+                                if (!routed || Array.isArray(routed) || typeof routed !== 'object' || Object.keys(routed).length !== entries.length || Object.entries(routed).some(([key, owner]) => !Object.hasOwn(data.owners, key) || !owner || !Number.isInteger(owner.station) || owner.station < 1 || owner.station > 5 || typeof owner.name !== 'string' || !owner.name.trim() || owner.name.length > 120)) throw new Error('Packing owners');
+                            }
+                            snapshot = data;
+                            // Ograniczamy ważność również przy utracie sieci i zmianie zegara komputera.
+                            expires = started + Math.min(90000, (data.validUntil - data.serverTime) * 1000);
+                            busy = false; message = ''; render();
+                        } catch { failed('Duże paczki: nie udało się odczytać planu. Sprawdź połączenie z panelem.'); }
+                    },
+                    onerror() { failed('Duże paczki: panel jest niedostępny. Próbuję ponownie.'); },
+                    ontimeout() { failed('Duże paczki: panel nie odpowiedział. Próbuję ponownie.'); }
+                });
+            } catch { failed('Duże paczki: nie udało się połączyć z panelem.'); }
         }
-        paint(null, 'Łączenie z Estila Print…');
-        update();
-        setInterval(update, 500); // StockSell changes routes/components without a full reload.
-        window.addEventListener('focus', () => { lastPoll = 0; update(); });
+        function tick() {
+            if (snapshot && performance.now() >= expires) {
+                snapshot = null; expires = 0; lastPoll = -Infinity;
+                message = 'Duże paczki: odświeżam przydział stanowisk.';
+            }
+            reportPresence(); reportStarts(); render(); poll();
+        }
+        window.addEventListener('focus', () => { lastPoll = -Infinity; tick(); });
+        tick(); setInterval(tick, 1000);
     })();
-    // ESTILA PINK CONTROL END
+    // ESTILA PACKING ASSIGNMENTS END
 
     const SELECTORS = {
         scanInput: 'input.mat-input-element, input[autofocus]',
@@ -153,7 +290,7 @@
     };
 
     function isBatchPage() {
-        return location.pathname.includes('/packing/batch');
+        return /^\/packing\/batch\/?$/.test(location.pathname);
     }
 
     function isPackingPage() {
@@ -735,16 +872,36 @@
             status.style.color = failed ? '#b71c1c' : '#2e7d32';
         }
 
+        const csvReaders = new Set();
+        let csvDownloadHook = null;
+
+        function isCsvCandidate(blob) {
+            if (!['[object Blob]', '[object File]'].includes(Object.prototype.toString.call(blob))) return false;
+            const type = String(blob.type || '').split(';', 1)[0].trim().toLowerCase();
+            if (type === 'application/pdf' || type === 'application/x-pdf' || /\.pdf$/i.test(blob.name || '')) return false;
+            // StockSell/browser exports can omit MIME or use a generic download type.
+            return ['', 'text/csv', 'application/csv', 'text/plain', 'application/octet-stream',
+                'application/vnd.ms-excel', 'text/comma-separated-values'].includes(type);
+        }
+
         function readCsvBlob(blob, manual = false) {
+            if (!isBatchPage()) return;
+            if (!isCsvCandidate(blob)) {
+                if (manual) showCsvImportStatus('Wybierz plik CSV z zawartością batchy. Pliki PDF nie są analizowane.', true);
+                return;
+            }
             const reader = new FileReader();
+            csvReaders.add(reader);
+            reader.onloadend = () => csvReaders.delete(reader);
             const reportFailure = () => {
-                if (!manual) return;
+                if (!manual || !isBatchPage()) return;
                 globalCsvRemaining = null;
                 document.getElementById('stocksell-strefy-summary')?.remove();
                 updateBatchHeading();
                 showCsvImportStatus('Nie udało się przeliczyć CSV. Sprawdź, czy wybrano plik z zawartością batchy, z kolumnami strefy i numeru batcha, i czy nie jest uszkodzony.', true);
             };
             reader.onload = () => {
+                if (!isBatchPage()) return;
                 try {
                     if (analyzeCsv(reader.result)) {
                         showCsvImportStatus('CSV przeliczony. Podsumowanie znajduje się pod listą batchy.');
@@ -761,13 +918,14 @@
         }
 
         function installCsvDownloadHook() {
+            if (!isBatchPage() || csvDownloadHook) return;
             const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
             const pageUrlApi = pageWindow.URL;
             if (!pageUrlApi?.createObjectURL || pageUrlApi.createObjectURL.__ssSuiteHooked) return;
 
             const originalCreateObjectURL = pageUrlApi.createObjectURL;
             const hookedCreateObjectURL = function (object) {
-                if (isBatchPage() && Object.prototype.toString.call(object) === '[object Blob]') {
+                if (isBatchPage() && isCsvCandidate(object)) {
                     try {
                         readCsvBlob(object);
                     } catch (error) {
@@ -779,6 +937,17 @@
 
             Object.defineProperty(hookedCreateObjectURL, '__ssSuiteHooked', { value: true });
             pageUrlApi.createObjectURL = hookedCreateObjectURL;
+            csvDownloadHook = { api: pageUrlApi, original: originalCreateObjectURL, hooked: hookedCreateObjectURL };
+        }
+
+        function removeCsvDownloadHook() {
+            // Do not overwrite a wrapper installed later by another script.
+            if (csvDownloadHook && csvDownloadHook.api.createObjectURL === csvDownloadHook.hooked) {
+                csvDownloadHook.api.createObjectURL = csvDownloadHook.original;
+                csvDownloadHook = null;
+            }
+            for (const reader of csvReaders) if (reader.readyState === FileReader.LOADING) reader.abort();
+            csvReaders.clear();
         }
 
         function buildBatchInterface() {
@@ -823,10 +992,13 @@
 
         function initBatchPage() {
             if (!isBatchPage()) {
+                removeCsvDownloadHook();
                 indicator.style.backgroundColor = '#9e9e9e';
                 indicator.title = 'Analiza batchy uśpiona - inna podstrona.';
                 return;
             }
+
+            installCsvDownloadHook();
 
             const batchList = document.querySelector(SELECTORS.batchList);
             const csvButton = findButtonByText('CSV');
@@ -842,7 +1014,6 @@
             updateBatchHeading();
         }
 
-        installCsvDownloadHook();
         initBatchPage();
         setInterval(initBatchPage, 1000);
     })();
@@ -1595,7 +1766,7 @@
     // MODUŁ 6: etykieta błędu zamówienia 100 x 150 mm z kodem Code 128
     // ---------------------------------------------------------------------
     (function orderErrorLabelModule() {
-        const LABEL_VERSION = '1.3.8';
+        const LABEL_VERSION = '1.6.4';
         const CODE_128_PATTERNS = [
             '212222', '222122', '222221', '121223', '121322', '131222',
             '122213', '122312', '132212', '221213', '221312', '231212',
@@ -1989,3 +2160,175 @@
         updateConfirmationPreviews();
     })();
 })();
+
+
+// ESTILA OLX LABEL BEGIN
+// Independent, read-only addition. No native packing/printing handlers are replaced.
+(function estilaOlxLabelModule() {
+    'use strict';
+    // Tymczasowo wyłączone na prośbę użytkownika; kod zachowany do ponownego włączenia.
+    const OLX_LABEL_ENABLED = false;
+    if (!OLX_LABEL_ENABLED) return;
+    if (window.top !== window.self || document.getElementById('ss-suite-olx-label')) return;
+    const origin = 'https://olx.estila.com.pl';
+    const paths = new Set(['/packing/batch/packing-singles', '/packing/batch/packing']);
+    const panel = document.createElement('section');
+    panel.id = 'ss-suite-olx-label';
+    panel.setAttribute('aria-label', 'Etykieta OLX bieżącego zamówienia');
+    const title = document.createElement('strong');
+    const status = document.createElement('p');
+    status.setAttribute('role', 'status');
+    const print = document.createElement('a');
+    print.textContent = 'Drukuj etykietę OLX';
+    print.target = '_blank'; print.rel = 'noopener noreferrer'; print.hidden = true;
+    const retry = document.createElement('button');
+    retry.type = 'button'; retry.textContent = 'Sprawdź ponownie';
+    const login = document.createElement('a');
+    login.textContent = 'Otwórz aplikację OLX'; login.href = origin + '/';
+    login.target = '_blank'; login.rel = 'noopener noreferrer'; login.hidden = true;
+    panel.append(title, status, print, retry, login);
+    GM_addStyle(`
+      #ss-suite-olx-label { position:fixed;right:18px;top:135px;width:258px;max-height:calc(100vh - 160px);overflow:auto;box-sizing:border-box;z-index:10000;padding:15px;border:2px solid #ac285b;border-radius:9px;background:#fff;color:#222;font:14px/1.4 Arial,sans-serif;box-shadow:0 3px 14px #0002; }
+      #ss-suite-olx-label strong {display:block;font-size:15px;overflow-wrap:anywhere;}
+      #ss-suite-olx-label p {margin:10px 0;}
+      #ss-suite-olx-label a,#ss-suite-olx-label button {display:block;box-sizing:border-box;width:100%;margin-top:9px;padding:10px;border-radius:5px;font:600 13px/1.35 Arial,sans-serif;text-align:center;cursor:pointer;text-decoration:none;}
+      #ss-suite-olx-label a {background:#ac285b;color:#fff;}
+      #ss-suite-olx-label button {border:1px solid #bbb;background:#fff;color:#333;}
+      #ss-suite-olx-label [hidden] {display:none!important;}
+      @media(max-width:900px) { #ss-suite-olx-label {top:auto;bottom:16px;max-height:45vh;width:230px;} }
+      @media print { #ss-suite-olx-label {display:none!important;} }
+    `);
+    const ignored = 'script,style,noscript,header,nav,aside,app-header,app-sidenav,[role="dialog"],.cdk-overlay-container,app-not-correct-confirmation-box,.not-correct-confirmation-box,[data-ss-label-ui],#ss-error-label-notice,.ss-suite-allegro-description';
+    const visible = el => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+    const normalize = value => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ł/gi, 'l').toUpperCase();
+    const basePattern = /^[1-9]\d{5,14}$/;
+    const olxPattern = /^[A-Z0-9-]{4,50}$/i;
+    function identity() {
+        if (!paths.has(location.pathname.replace(/\/$/, ''))) return null;
+        const texts = [];
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+            const node = walker.currentNode, parent = node.parentElement;
+            if (!parent || panel.contains(parent) || parent.closest(ignored) || !visible(parent)) continue;
+            if (node.textContent.trim()) texts.push(node.textContent.trim());
+        }
+        const text = normalize(texts.join('\n'));
+        const marked = /\b(?:PRZESYLKA|ZAMOWIENIE)\s+OLX\b|\bID\s+OLX\s*:/.test(text);
+        const olxIds = [...new Set(Array.from(text.matchAll(/\bID\s+OLX\s*:\s*([A-Z0-9-]{4,50})\b/g), m => m[1]))];
+        const baseIds = new Set();
+        for (const link of document.querySelectorAll('a[href]')) {
+            if (panel.contains(link) || link.closest(ignored) || !visible(link)) continue;
+            try {
+                const url = new URL(link.href);
+                if (url.protocol === 'https:' && url.hostname === 'panel.baselinker.com' && url.pathname === '/orders.php') {
+                    const id = url.hash.match(/^#order:([1-9]\d{5,14})$/)?.[1];
+                    if (id) baseIds.add(id);
+                }
+            } catch { /* Not a Base order link. */ }
+        }
+        const labels = /\b(?:(?:NUMER|NR\.?|ID)\s+ZAMOWIENIA(?:\s+(?:BASE|BASELINKER))?|ZAMOWIENIE(?:\s+(?:NR\.?|BASE|BASELINKER))?|BASE(?:LINKER)?(?:\s*(?:ID|NR\.?))?)\s*[:#]?\s*([1-9]\d{5,14})\b/g;
+        for (const match of text.matchAll(labels)) baseIds.add(match[1]);
+        for (const el of document.querySelectorAll('.order-number,[data-cy="order-number"],[data-cy="base-order-id"]')) {
+            if (!panel.contains(el) && !el.closest(ignored) && visible(el) && basePattern.test(el.textContent.trim())) baseIds.add(el.textContent.trim());
+        }
+        if (olxIds.length > 1 || baseIds.size > 1) return marked ? {error:'Widoczne są różne numery zamówień. Nie wybrano etykiety.',key:'ambiguous:' + olxIds.join(',') + ':' + [...baseIds].join(',')} : null;
+        const olxId = olxIds[0] || '', baseId = [...baseIds][0] || '';
+        if (!olxId && !baseId) return marked ? {error:'Nie odczytano numeru Base ani ID OLX bieżącego zamówienia.',key:'missing'} : null;
+        return {olxId,baseId,marked,key:olxId + ':' + baseId + ':' + marked};
+    }
+    let currentKey = '', generation = 0, objectUrl = null, indexCache = null;
+    const requests = new Set();
+    const current = (g,key) => generation === g && identity()?.key === key;
+    function clearFile() {
+        print.hidden = true; print.removeAttribute('href');
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+    }
+    function abortRequests() { for (const req of requests) req.abort?.(); requests.clear(); }
+    function request(url,binary=false) {
+        return new Promise((resolve,reject) => {
+            let handle;
+            const finish = fn => value => { requests.delete(handle); fn(value); };
+            handle = GM_xmlhttpRequest({method:'GET',url,timeout:15000,anonymous:false,
+                responseType:binary?'arraybuffer':'text',
+                onload:finish(response=>{
+                    let final;
+                    try {final=new URL(response.finalUrl||url);}catch{}
+                    if (response.status===401 || response.status===403 || final?.origin!==origin || !final.pathname.startsWith('/api/')) return reject(Error('Zaloguj się do aplikacji OLX na tym stanowisku, a potem sprawdź ponownie.'));
+                    if (response.status!==200) return reject(Error('Nie udało się pobrać etykiety z aplikacji OLX. Spróbuj ponownie.'));
+                    resolve(response);
+                }),
+                onerror:finish(()=>reject(Error('Brak połączenia z aplikacją OLX.'))),
+                ontimeout:finish(()=>reject(Error('Aplikacja OLX nie odpowiedziała. Spróbuj ponownie.'))),
+                onabort:finish(()=>reject(Error('Zmieniono zamówienie.')))
+            });
+            requests.add(handle);
+        });
+    }
+    function json(response) {
+        try {return JSON.parse(response.responseText);}catch{throw Error('Zaloguj się do aplikacji OLX na tym stanowisku, a potem sprawdź ponownie.');}
+    }
+    async function resolveJob(selected,g) {
+        if (selected.olxId) return json(await request(origin+'/api/job?id='+encodeURIComponent(selected.olxId)));
+        if (!indexCache || Date.now()-indexCache.time > 30000) {
+            const rows = json(await request(origin+'/api/jobs'));
+            if (!current(g,selected.key)) return null;
+            if (!Array.isArray(rows) || rows.length>200) throw Error('Aplikacja zwróciła niepoprawne powiązania zamówień.');
+            // Retain only linkage, never buyer contacts or the raw order list.
+            indexCache={time:Date.now(),rows:rows.map(row=>({id:row.id,base_id:row.base_id,state:row.state,has_label:row.has_label}))};
+        }
+        const matches = indexCache.rows.filter(row=>String(row.base_id)===selected.baseId);
+        if (!matches.length) return null;
+        if (matches.length!==1 || !olxPattern.test(matches[0].id)) throw Error('Numer Base nie wskazuje jednoznacznie jednego zamówienia OLX.');
+        // Read fresh metadata before exposing any file, even with a cached index.
+        return json(await request(origin+'/api/job?id='+encodeURIComponent(matches[0].id)));
+    }
+    async function load(selected,g) {
+        retry.disabled=true; login.hidden=true;
+        status.textContent='Sprawdzam zamówienie i etykietę…';
+        try {
+            const job = await resolveJob(selected,g);
+            if (!current(g,selected.key)) return;
+            if (!job) {
+                if (!selected.marked) {panel.remove();return;}
+                throw Error('Nie znaleziono tego numeru Base w ostatnich zamówieniach aplikacji OLX. Sprawdź powiązanie w aplikacji.');
+            }
+            if (!olxPattern.test(job.id) || !basePattern.test(String(job.base_id)) || (selected.olxId && job.id!==selected.olxId) || (selected.baseId && String(job.base_id)!==selected.baseId) || job.state!=='done' || !job.has_label) throw Error('Nie potwierdzono powiązania OLX ↔ Base i gotowej etykiety. Plik nie został wybrany.');
+            const response = await request(origin+'/api/job?id='+encodeURIComponent(job.id)+'&action=label',true);
+            if (!current(g,selected.key)) return;
+            const bytes = new Uint8Array(response.response);
+            if (bytes.length<5 || bytes.length>3*1024*1024 || String.fromCharCode(...bytes.slice(0,5))!=='%PDF-') throw Error('Odpowiedź nie zawiera poprawnej etykiety PDF.');
+            objectUrl=URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}));
+            title.textContent=`Etykieta OLX · Base ${job.base_id}`;
+            status.textContent=`ID OLX: ${job.id}. Otwórz PDF i wybierz drukowanie.`;
+            print.href=objectUrl; print.hidden=false;
+        }catch(error){
+            if (current(g,selected.key)) {clearFile();status.textContent=error.message;login.hidden=false;}
+        }finally{if(g===generation)retry.disabled=false;}
+    }
+    function update(force=false) {
+        const selected=identity(),key=selected?.key||'';
+        if (!force && currentKey===key) return;
+        currentKey=key; generation++; abortRequests(); clearFile();
+        if (!selected) {panel.remove();return;}
+        if (force) indexCache=null;
+        if (!panel.isConnected) document.body.append(panel);
+        title.textContent=selected.baseId?`Etykieta OLX · Base ${selected.baseId}`:'Etykieta Przesyłki OLX';
+        retry.disabled=false;login.hidden=true;
+        if(selected.error){status.textContent=selected.error;return;}
+        load(selected,generation);
+    }
+    retry.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();update(true);});
+    print.addEventListener('click',event=>{if(identity()?.key!==currentKey || !objectUrl){event.preventDefault();update();}});
+    let queued=false;
+    new MutationObserver(records=>{
+        if(records.every(record=>panel.contains(record.target)))return;
+        if((identity()?.key||'')!==currentKey){generation++;abortRequests();currentKey=null;clearFile();panel.remove();}
+        if(!queued){queued=true;setTimeout(()=>{queued=false;update();},100);}
+    }).observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['hidden','style','class','href']});
+    window.addEventListener('popstate',()=>update());
+    setInterval(()=>update(),1000);
+    update();
+})();
+// ESTILA OLX LABEL END
+
