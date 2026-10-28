@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StockSell AI -> Google Sheets (Dynamiczne Kategorie)
 // @namespace    http://tampermonkey.net/
-// @version      3.1.0
+// @version      3.1.1
 // @description  Logi AI do dotychczasowego arkusza oraz rejestrator poprawek Estila z zatwierdzaniem stanowisk.
 // @match https://stocksell.io/*
 // @match https://*.stocksell.io/*
@@ -21,7 +21,7 @@
 
 (function(){
 'use strict';
-const BOOT='__estilaStocksellAiRecorderCombined310';
+const BOOT='__estilaStocksellAiRecorderCombined311';
 if(globalThis[BOOT]===true)return;
 Object.defineProperty(globalThis,BOOT,{value:true,configurable:false});
 let sheetsStarted=false;
@@ -483,7 +483,7 @@ const scope={crypto};
     }
     return false;
   }
-  function exportData(db) { return {format:'stocksell-change-log',version:2,exportedAt:new Date().toISOString(),extensionVersion:'0.4.0',cases:sanitize(db.cases,0,{maxDepth:32,maxItems:Infinity,maxKeys:Infinity}),diagnostic:db.diagnostic}; }
+  function exportData(db) { return {format:'stocksell-change-log',version:2,exportedAt:new Date().toISOString(),extensionVersion:'0.4.1',cases:sanitize(db.cases,0,{maxDepth:32,maxItems:Infinity,maxKeys:Infinity}),diagnostic:db.diagnostic}; }
   const api = Object.freeze({fields:[...fields],labels,productId,productFrom,sanitize,parseJson,describe,diff,formDiff,actionType,responseError,newStore,upgradeStore,reduceEvent,exportData,cleanString});
   if(typeof module !== 'undefined' && module.exports)module.exports=api;else Object.defineProperty(root,'StockLogCore',{value:api,configurable:true});
 })(scope);
@@ -567,7 +567,7 @@ const scope={crypto};
     const sourceId=uuid();
     const retentionMs=15*60*1000,limit=Math.min(8500000,Number.isFinite(deps.saveLimitBytes)&&deps.saveLimitBytes>0?deps.saveLimitBytes:8500000);
     const now=()=>{const value=typeof deps.clock==='function'?deps.clock():Date.now();const date=new Date(value);return Number.isFinite(date.getTime())?date.toISOString():new Date().toISOString();};
-    let cleanupDiagnostic=null;
+    let cleanupDiagnostic=null,lastMaintenanceAt=-Infinity;
     let local={version:1,sourceId,generation:0,currentCaseId:null,currentProductId:null,db:core.newStore(),revisions:{},diagnostic:null,halted:false,updatedAt:now()},queue=Promise.resolve(),syncState=null;
     const serial=work=>{const result=queue.then(work,work);queue=result.catch(()=>{});return result;};
     const bytes=value=>new TextEncoder().encode(JSON.stringify(value)).length;
@@ -618,6 +618,7 @@ const scope={crypto};
       return true;
     }
     async function maintenance(){
+      const stamp=Date.parse(now());if(stamp-lastMaintenanceAt<60000)return;lastMaintenanceAt=stamp;
       await collectGarbage();const next=clone(local);if(await pruneOwned(next)){next.updatedAt=now();try{await commit(next);}catch{cleanupDiagnostic='Nie udało się posprzątać potwierdzonych logów. Dane pozostały w magazynie.';}}
     }
     const clearKey=(caseId,rev)=>CLEAR+encodeURIComponent(caseId)+'.'+rev;
@@ -646,6 +647,10 @@ const scope={crypto};
       let state=waiting.length?'pending':lastSuccessAt?'synced':'pending',message=waiting.length?'Logi czekają na wysłanie do aplikacji.':'Brak oczekujących zmian.';
       if(syncState){state=syncState.state;message=syncState.message;}
       return {state,message,pendingCases:waiting.length,lastSuccessAt};
+    }
+    async function getSummary(){
+      const cfg=await config();
+      return {ok:true,enabled:cfg.enabled&&!local.halted,operator:cfg.operator,cases:[],diagnostic:local.diagnostic||cleanupDiagnostic||null,sync:syncState||null,summaryOnly:true};
     }
     async function getData(){const cfg=await config(),view=await merged();return {ok:true,enabled:cfg.enabled&&!local.halted,operator:cfg.operator,cases:view.items.map(item=>item.record),diagnostic:local.diagnostic||cleanupDiagnostic||view.errors[0]||view.shards.map(shard=>shard.value.diagnostic).find(Boolean)||null,sync:await statusInternal(view)};}
     async function revise(next){
@@ -711,6 +716,7 @@ const scope={crypto};
       if(message.type==='capture-event')return capture(message.event);
       if(message.type==='capture-status'){const cfg=await config();const actions=Object.values(local.db.contexts||{}).map(context=>context.lastAction).filter(Boolean).sort((a,b)=>Date.parse(b.at)-Date.parse(a.at));return {enabled:cfg.enabled&&!local.halted,diagnostic:local.diagnostic,lastAction:actions[0]||null};}
       if(message.type==='get-data')return getData();
+      if(message.type==='get-summary')return getSummary();
       if(message.type==='export'){const data=await getData();return {ok:true,data:core.exportData({cases:data.cases,diagnostic:data.diagnostic})};}
       if(message.type==='settings'){
         if((Object.hasOwn(message,'enabled')&&typeof message.enabled!=='boolean')||(Object.hasOwn(message,'operator')&&typeof message.operator!=='string'))return {ok:false};
@@ -721,11 +727,11 @@ const scope={crypto};
       if(message.type==='sync-ack')return acknowledgeInternal(message.caseId,message.revision);
       if(message.type==='sync-status'){
         if(typeof message.state==='string'&&['pending','syncing','synced','offline','error','missing_key','key_rejected','waiting'].includes(message.state))syncState={state:message.state,message:cleanText(message.message||'').slice(0,400)};
-        return {ok:true,sync:await statusInternal()};
+        return {ok:true,sync:syncState};
       }
       return {ok:false};
     }
-    return Object.freeze({sourceId,request:message=>serial(async()=>{await maintenance();return handle(message);}),pending:()=>serial(async()=>{await maintenance();return pendingInternal();}),acknowledge:(caseId,rev)=>serial(async()=>{await maintenance();return acknowledgeInternal(caseId,rev);}),revision});
+    return Object.freeze({sourceId,request:message=>serial(async()=>{if(!['capture-status','get-summary','sync-status'].includes(message?.type))await maintenance();return handle(message);}),pending:()=>serial(async()=>{await maintenance();return pendingInternal();}),acknowledge:(caseId,rev)=>serial(async()=>{await maintenance();return acknowledgeInternal(caseId,rev);}),revision});
   }
   Object.defineProperty(root,'StockLogUserscriptRuntime',{value:Object.freeze({create}),configurable:true});
 })(scope);
@@ -852,7 +858,7 @@ const scope={crypto};
  root.StockLogUserscriptDOM=function(options) {
   'use strict';
   const core=options.core,StockLogForm=options.form;
-  let active=true,lastUi='',lastForm='',route='',sessionId='',timer=null,lastAction=null,visibleUi=new Map();
+  let active=true,lastUi='',lastForm='',route='',sessionId='',timer=null,uiTimer=null,lastFormAt=-Infinity,lastLabelsAt=-Infinity,lastLabels={},lastAction=null,visibleUi=new Map();
   const now=()=>new Date().toISOString();
   const idInPage=()=>core.productId(location.pathname.match(/^\/products\/([0-9a-f-]{36})(?:\/|$)/i)?.[1]);
   function currentProduct() {return idInPage()||(lastAction&&Date.now()-Date.parse(lastAction.at)<180000?lastAction.productId:null);}
@@ -869,22 +875,23 @@ const scope={crypto};
       if(reply?.diagnostic) {active=false;settings(false);}
     }).catch(()=>{active=false;});
   }
-  function collectForm() {
+  function collectForm(force=false) {
     const productId=idInPage();if(!active||!productId)return null;
-    if(route!==location.pathname) {route=location.pathname;sessionId=crypto.randomUUID();lastForm='';lastUi='';visibleUi=new Map();}
+    if(route!==location.pathname) {route=location.pathname;sessionId=crypto.randomUUID();lastForm='';lastUi='';lastFormAt=-Infinity;lastLabelsAt=-Infinity;lastLabels={};visibleUi=new Map();}
+    if(!force&&(document.hidden||Date.now()-lastFormAt<3000))return null;lastFormAt=Date.now();
     const fields=StockLogForm.collect(document),signature=JSON.stringify(fields);
     if(Object.keys(fields).length&&signature!==lastForm) {lastForm=signature;deliver({kind:'form',productId,formId:sessionId,fields,at:now()});}
     return fields;
   }
   function collectUi() {
-    if(!active)return;
+    if(!active||document.hidden)return;
     const productId=currentProduct();if(!productId){route='';return;}
     collectForm();
-    const labels={};
-    if(idInPage())for(const element of document.querySelectorAll('[id^="parameter_"]')) {
+    let labels=lastLabels;
+    if(idInPage()&&Date.now()-lastLabelsAt>=3000){labels={};for(const element of document.querySelectorAll('[id^="parameter_"]')) {
       const code=element.id.match(/^parameter_(\d+)/)?.[1],text=StockLogForm.label(element);
       if(code&&text)for(const prefix of ['allegroRequiredParameters','allegroNotRequiredParameters'])labels[`${prefix}.${code}`]=text;
-    }
+    }lastLabelsAt=Date.now();lastLabels=labels;}
     const previousVisible=visibleUi;visibleUi=new Map();
     const actionId=lastAction?.actionId||null;
     const messages=[...document.querySelectorAll('mat-error,mat-snack-bar-container,mat-mdc-snack-bar-container,[role="alert"],[role="dialog"],.cdk-overlay-pane .error')]
@@ -902,7 +909,7 @@ const scope={crypto};
   }
   function action(label,type) {
     if(!active||!idInPage())return;
-    const fields=collectForm()||{},at=now(),productId=idInPage();
+    const fields=collectForm(true)||{},at=now(),productId=idInPage();
     if(type==='submit'&&lastAction?.productId===productId&&Date.now()-Date.parse(lastAction.at)<500)return;
     lastAction={productId,actionId:crypto.randomUUID(),at};
     deliver({kind:'action',...lastAction,actionType:type,label:label.slice(0,250),fields});
@@ -917,11 +924,15 @@ const scope={crypto};
     const type=core.actionType(text)||(button.type==='submit'?'submit':null);if(type)action(text,type);
   },true);
   document.addEventListener('submit',event=>{if(!event.target?.closest?.('[data-stocksell-recorder-ui]'))action('Wysłanie formularza','submit');},true);
-  document.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(collectUi,250);},true);
-  document.addEventListener('change',()=>{clearTimeout(timer);timer=setTimeout(collectUi,100);},true);
-  const observer=new MutationObserver(()=>{clearTimeout(timer);timer=setTimeout(collectUi,350);});
-  observer.observe(document,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['aria-invalid','aria-selected','aria-checked','aria-pressed','value','class','src']});
-  status();setInterval(status,5000);setInterval(collectUi,1000);
+  // Typing marks the form dirty; it never scans or writes the whole history
+  // in the input event. A bounded fallback also catches silent .value updates.
+  document.addEventListener('input',event=>{if(event.target?.closest?.('[data-stocksell-recorder-ui]'))return;clearTimeout(timer);timer=setTimeout(()=>collectForm(),900);},true);
+  document.addEventListener('change',()=>{if(!uiTimer)uiTimer=setTimeout(()=>{uiTimer=null;collectUi();},300);},true);
+  const observer=new MutationObserver(()=>{if(active&&!document.hidden&&!uiTimer)uiTimer=setTimeout(()=>{uiTimer=null;collectUi();},500);});
+  // Global class/value changes used to rescan the page continuously. Native
+  // value polling and forced action snapshots retain those values without it.
+  observer.observe(document,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['aria-invalid']});
+  status();setInterval(status,15000);setInterval(collectUi,3000);
   return {collectUi,collectForm,refreshStatus:status};
  };
 })(scope);
@@ -933,7 +944,7 @@ const scope={crypto};
 const ENDPOINT='https://odlozone.estila.com.pl/recorder-ingest.php',BASE='estilaStocksellEnrollment.',CANDIDATE=BASE+'candidate.',CANONICAL=BASE+'canonical',REGISTERED=BASE+'registered.';
 const valid=value=>value&&typeof value.id==='string'&&/^[a-f0-9]{32}$/.test(value.id)&&typeof value.key==='string'&&new RegExp('^'+value.id+'\\.[a-f0-9]{64}$').test(value.key)&&Number.isFinite(value.createdAt);
 function create(options){
- const store=options.store,transport=options.transport,crypto=options.crypto||root.crypto,now=options.now||(()=>Date.now()),label=options.label||(()=>''),version=options.version||'0.4.0';
+ const store=options.store,transport=options.transport,crypto=options.crypto||root.crypto,now=options.now||(()=>Date.now()),label=options.label||(()=>''),version=options.version||'0.4.1';
  let flight=null,nextPoll=0,failures=0,cached=null;
  const hex=bytes=>Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
  async function credentials(){
@@ -1093,6 +1104,7 @@ root.StockLogUserscriptSync=Object.freeze({create,endpoint:ENDPOINT});
       $('detail').innerHTML = `<div class="detail-header"><span class="eyebrow">SZCZEGÓŁY PRODUKTU</span><h2>${escape(record.name || 'Produkt bez nazwy')}</h2><p class="detail-meta">Kod ${escape(record.code ?? '—')} · SKU ${escape(record.sku ?? '—')}<br>ID: ${escape(record.productId || '—')}${record.operator ? '<br>Oznaczenie: '+escape(record.operator) : ''}</p>${pill(record.outcome)}</div><div class="readme">To zapis pracy w Stocksellu. HTTP 200 samo w sobie nie potwierdza zapisu. Po poprawieniu ponownie otwórz produkt, aby potwierdzić wartości.</div>${history(record)}<h3 class="section-title">Żądania wysłane do Stocksella</h3>${attempts(record) || '<p class="meta">Nie zarejestrowano żądania zapisu. Sprawdź przebieg kliknięć i komunikaty formularza.</p>'}${!array(record.uiMessages).length && array(record.uiErrors).length ? `<h3 class="section-title">Komunikaty formularza</h3>${errors(record.uiErrors)}` : ''}`;
     }
     function render() {
+      if(!isOpen){$('floating-label').textContent=data.diagnostic?'Stocksell · Logi — sprawdź':data.enabled?'Stocksell · Logi':'Stocksell · Logi — OFF';$('floating').classList.toggle('off',!data.enabled);return;}
       const records = [...array(data.cases)].reverse(), mode = $('filter').value, query = $('search').value.trim().toLocaleLowerCase('pl-PL');
       const visible = records.filter(record=>(mode === 'all' || record.outcome === mode) && (!query || [record.code,record.name,record.sku,record.operator].some(field=>String(field ?? '').toLocaleLowerCase('pl-PL').includes(query))));
       if (!visible.some(record=>record.caseId === selected)) selected = visible[0]?.caseId || null;
@@ -1120,7 +1132,7 @@ root.StockLogUserscriptSync=Object.freeze({create,endpoint:ENDPOINT});
     }
     async function refresh() {
       const current = ++generation;
-      try { const incoming = await options.getData(); if (current !== generation) return false; if (!incoming || typeof incoming !== 'object') throw new Error(); data = {enabled:incoming.enabled === true,operator:typeof incoming.operator === 'string' ? incoming.operator : '',cases:array(incoming.cases),diagnostic:incoming.diagnostic || null,sync:incoming.sync && typeof incoming.sync === 'object' ? incoming.sync : null}; render(); return true; }
+      try { const incoming = await options.getData({full:isOpen}); if (current !== generation) return false; if (!incoming || typeof incoming !== 'object') throw new Error(); data = {enabled:incoming.enabled === true,operator:typeof incoming.operator === 'string' ? incoming.operator : '',cases:array(incoming.cases),diagnostic:incoming.diagnostic || null,sync:incoming.sync && typeof incoming.sync === 'object' ? incoming.sync : null}; render(); return true; }
       catch { if (current === generation) notify('Nie udało się odczytać lokalnych logów. Spróbuj odświeżyć panel.', true); return false; }
     }
     function open() { isOpen = true; $('overlay').hidden = false; $('floating').hidden = true; refresh(); $('panel-title').focus(); }
@@ -1174,7 +1186,7 @@ root.StockLogUserscriptStart=function(config){
   try{handle=GM_xmlhttpRequest({...details,redirect:'error',onload:value=>finish(true,value),onerror:()=>finish(false,'network'),ontimeout:()=>finish(false,'timeout'),onabort:()=>finish(false,'abort')});}
   catch{finish(false,'request_failed');}
  });
- const enrollment=scope.StockLogEnrollment.create({store,transport,crypto,version:'0.4.0',label:()=>document.querySelector('[data-cy=username] .header')?.textContent||''});
+ const enrollment=scope.StockLogEnrollment.create({store,transport,crypto,version:'0.4.1',label:()=>document.querySelector('[data-cy=username] .header')?.textContent||''});
  const sync=scope.StockLogUserscriptSync.create({runtime,transport,keyProvider:metadata=>enrollment.authorize(metadata),invalidate:()=>enrollment.invalidate()});
  function deliver(event){
   runtime.request({type:'capture-event',event}).then(reply=>{
@@ -1193,7 +1205,7 @@ root.StockLogUserscriptStart=function(config){
  }
  function mount(){
   panel=scope.StockLogUserscriptPanel({core,
-   getData:async()=>{const data=await runtime.request({type:'get-data'});if(captureWarning)data.diagnostic=captureWarning;return data;},
+   getData:async({full}={})=>{const data=await runtime.request({type:full?'get-data':'get-summary'});if(captureWarning)data.diagnostic=captureWarning;return data;},
    onSettings:async changes=>{const reply=await runtime.request({type:'settings',...changes});await dom.refreshStatus();return reply;},
    onExport:exportBackup,
    onRefresh:()=>sync.refresh(),
@@ -1209,7 +1221,7 @@ root.StockLogUserscriptStart=function(config){
  }
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount();
  setInterval(()=>sync.tick().then(refresh).catch(()=>{}),15000);
- setInterval(refresh,10000);
+ setInterval(refresh,30000);
  window.addEventListener('online',()=>sync.refresh().then(refresh).catch(()=>{}));
 };
 })(scope);
