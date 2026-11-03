@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Estila · Uwagi do odłożonych w Base
 // @namespace    https://odlozone.estila.com.pl/base-notes
-// @version      0.1.31
+// @version      0.1.32
 // @description  Poprawki przy produktach zwrotu: uwaga przed zmianą statusu. Pilotaż.
 // @match        https://panel.baselinker.com/orders_returns.php*
 // @run-at       document-start
@@ -128,7 +128,7 @@
   /*CORE_END*/
   if(window.__estilaBaseNotes) return;
   window.__estilaBaseNotes=true;
-  let session=null, bypass=false, wrap=null, originalStatus=null, scanTimer=null;
+  let session=null, openingNotes=false, bypass=false, wrap=null, originalStatus=null, scanTimer=null;
   const savedValues=new Map(), pending=new Map();
   // Stop page/document hotkeys while the overlay is open. Keep native typing/copy/paste.
   for(const type of ['keydown','keypress','keyup'])window.addEventListener(type,e=>{
@@ -142,7 +142,55 @@
   const rid=()=>location.hash.match(/^#return:(\d+)$/)?.[1];
   const visible=e=>e&&e.getBoundingClientRect().width>0;
   const noteAnchor=()=>document.querySelector('a#oms_info_admin_comments');
-  const noteValue=()=>{const a=noteAnchor();if(!a)throw Error('Zamknij natywny edytor uwag i spróbuj ponownie.');return a.textContent==='...'?'':a.textContent;};
+  async function openNoteField(returnId) {
+    if (rid() !== returnId) throw Error('Zwrot się zmienił.');
+    const anchor = noteAnchor();
+    if (!anchor || document.querySelector('#oms_info_form')) throw Error('Najpierw zakończ otwartą edycję danych zwrotu w Base.');
+    anchor.click();
+    const form = await waitFor(() => {
+      if (rid() !== returnId) throw Error('Zwrot się zmienił.');
+      return document.querySelector('#oms_info_form');
+    });
+    const field = form.querySelector('input[type="text"]#extra_field_47435[name="extra_field_47435"]');
+    if (!field) {
+      await closeNoteForm(form, returnId);
+      throw Error('Brak pola „Odłożone - uwagi do produktów” w tym zwrocie.');
+    }
+    return field;
+  }
+  async function closeNoteForm(form, returnId) {
+    if (!form.isConnected || rid() !== returnId) return;
+    const cancel = form.querySelector('input[type="button"][value="Anuluj"]');
+    if (!cancel) throw Error('Zamknij formularz edycji Base przyciskiem „Anuluj”.');
+    cancel.click();
+    await waitFor(() => rid() !== returnId || (!form.isConnected && noteAnchor()));
+  }
+  async function saveNoteField(returnId, original, next) {
+    const field = await openNoteField(returnId);
+    const form = field.form;
+    if (field.value !== original) {
+      await closeNoteForm(form, returnId);
+      throw Error('Uwaga została zmieniona w Base. Otwórz nakładkę ponownie, aby nie nadpisać zmian.');
+    }
+    if (next === original) {
+      await closeNoteForm(form, returnId);
+      return;
+    }
+    const submit = form.querySelector('input[type="submit"][value="Zapisz"]');
+    if (!submit || (field.maxLength >= 0 && next.length > field.maxLength)) {
+      await closeNoteForm(form, returnId);
+      throw Error('Sprawdź dostępność zapisu i limit znaków pola w Base.');
+    }
+    field.value = next;
+    field.dispatchEvent(new Event('input',{bubbles:true}));
+    field.dispatchEvent(new Event('change',{bubbles:true}));
+    submit.click();
+    await waitFor(() => rid() !== returnId || (!form.isConnected && noteAnchor()));
+    const saved = await openNoteField(returnId);
+    const confirmed = saved.value === next;
+    await closeNoteForm(saved.form, returnId);
+    if (!confirmed) throw Error('Base nie potwierdziło zapisu w polu „Odłożone - uwagi do produktów”.');
+  }
   function products(){
     return [...document.querySelectorAll('tr[id^="sale_item_row_"]')].map(row=>{
       const select=row.querySelector('select.return_item_status'), name=row.querySelector('[data-tid="productName"] p');
@@ -323,11 +371,28 @@
     }
     return true;
   }
-  function open(ids,triggered=false){
+  async function openFromBase(ids, triggered, returnId) {
+    if (openingNotes) return;
+    openingNotes = true;
+    try {
+      const field = await openNoteField(returnId);
+      const raw = field.value;
+      await closeNoteForm(field.form, returnId);
+      if (rid() !== returnId) throw Error('Zwrot się zmienił.');
+      open(ids, triggered, raw);
+    } catch (error) {
+      resetPending();
+      alert('Nakładka Estila: ' + error.message);
+    } finally {
+      openingNotes = false;
+    }
+  }
+  function open(ids,triggered=false,raw){
     if(!rid())return;
     if(session){if(triggered)message('Dodano kolejną oczekującą zmianę statusu. Zapisz obecne uwagi, następnie otwórz pozostałą pozycję.');return;}
+    if (raw === undefined) return openFromBase(ids, triggered, rid());
     try{
-      const all=products(), raw=noteValue(), parsed=parseNote(raw,all), wanted=new Set(ids);
+      const all=products(), parsed=parseNote(raw,all), wanted=new Set(ids);
       const selected=all.filter(p=>wanted.has(p.id));if(!selected.length||selected.length!==wanted.size||new Set(selected.map(p=>p.id)).size!==selected.length)throw Error('Nie odczytano jednoznacznego identyfikatora produktu.');
       const group=selected.every(eligible);
       if(!group&&(selected.length!==1||triggered))throw Error('Wspólne okno może zawierać tylko produkty ze statusem Odłożone - do wystawienia.');
@@ -460,7 +525,7 @@
         update();
       });shadow.querySelector('#save').onclick=save;update();
       shadow.querySelector('[data-field]').value='Rozmiar';shadow.querySelector('[data-value]').focus();
-    }catch(e){alert('Nakładka Estila: '+e.message);}
+    }catch(e){resetPending();alert('Nakładka Estila: '+e.message);}
   }
   function assignRest(){
     const s=session,text=s.shadow.querySelector('#rest').value.trim();if(!text)return;
@@ -471,13 +536,13 @@
   function addProduct(){
     const s=session,id=s.shadow.querySelector('#more-product').value;if(!id||s.busy)return;
     let all;
-    try{all=currentSelection(s);if(noteValue()!==s.raw)throw Error('Uwaga w Base się zmieniła. Otwórz nakładkę ponownie, aby zachować nowszy zapis.');}catch(e){message(e.message,true);return;}
+    try{all=currentSelection(s);}catch(e){message(e.message,true);return;}
     const matches=all.filter(p=>p.id===id),p=matches.length===1?matches[0]:null;
     if(!s.group||!p||!eligible(p)){refreshMore();message('Ten produkt nie ma statusu Odłożone - do wystawienia. Wybierz status ręcznie w Base.',true);return;}
     const stored=s.selected.map(p=>{const e=s.shadow.querySelector(`[data-note="${p.id}"]`),card=e.closest('.card');return {id:p.id,text:e.value,mode:card.querySelector('[data-mode]').value,field:card.querySelector('[data-field]').value,parameter:card.querySelector('[data-product-parameters]').value,manualParameter:card.querySelector('[data-manual-parameter]').value,value:card.querySelector('[data-value]').value,helperMode:card.querySelector('[data-helper]').dataset.mode,categoryOpen:!card.querySelector('[data-category-box]').hidden,stateOpen:!card.querySelector('[data-state-box]').hidden,productState:card.querySelector('[data-product-state]').value,tagEditor:card.querySelector('[data-tag-box]:not([hidden])')?.dataset.tagBox,tagValues:[...card.querySelectorAll('[data-tag-value]')].map(select=>select.value),categoryFilter:card.querySelector('[data-category-filter]').value,custom:card.querySelector('[data-custom]').value,customOpen:!card.querySelector('[data-custom-box]').hidden,defectOpen:!card.querySelector('[data-defect-box]').hidden,defect:card.querySelector('[data-defect]').value,scope:card.querySelector('[data-scope]').value,scopeOpen:!card.querySelector('[data-scope-box]').hidden,splitOpen:!card.querySelector('[data-split-box]').hidden,splitValues:[...card.querySelectorAll('[data-split-box] input')].map(input=>input.value)};});
     const rest=s.shadow.querySelector('#rest').value;
     // Adding a note never changes eligibility or queues a status request.
-    const ids=[...s.selected.map(p=>p.id),id];s.host.remove();session=null;open(ids);
+    const ids=[...s.selected.map(p=>p.id),id];s.host.remove();session=null;open(ids,false,s.raw);
     if(!session)return;for(const row of stored){const e=session.shadow.querySelector(`[data-note="${row.id}"]`),card=e.closest('.card');showParameterChoices(card,offlineParameters);e.value=row.text;card.querySelector('[data-mode]').value=row.mode;card.querySelector('[data-field]').value=row.field;card.querySelector('[data-product-parameters]').value=row.parameter;card.querySelector('[data-manual-parameter]').value=row.manualParameter;card.querySelector('[data-value]').value=row.value;card.querySelector('[data-custom]').value=row.custom;setEditor(card,row.helperMode||'helper');const filter=card.querySelector('[data-category-filter]');filter.value=row.categoryFilter;card.querySelector('[data-category-add]').disabled=!filter.value.trim();card.querySelector('[data-product-state]').value=row.productState;setEditor(card,row.categoryOpen?'category':row.stateOpen?'state':row.tagEditor?row.tagEditor:row.customOpen?'custom':row.defectOpen?'defect':row.scopeOpen?'scope':row.splitOpen?'split':row.helperMode||'helper');card.querySelectorAll('[data-tag-value]').forEach((select,index)=>select.value=row.tagValues[index]);card.querySelector('[data-defect]').value=row.defect;card.querySelector('[data-scope]').value=row.scope;card.querySelectorAll('[data-split-box] input').forEach((input,index)=>input.value=row.splitValues[index]);}session.shadow.querySelector('#rest').value=rest;update();
   }
   function message(text,error=false){if(session){const e=session.shadow.querySelector('#message');e.textContent=text;e.className=error?'error':'';}}
@@ -596,16 +661,8 @@
           throw Error('Wpisz, co trzeba poprawić w produkcie, np. rozmiar 36 albo plama na rękawie.');
         }
       }
-      if(noteValue()!==s.raw)throw Error('Uwaga została zmieniona w Base. Otwórz nakładkę ponownie, aby nie nadpisać zmian.');
       s.busy=true;s.shadow.querySelectorAll('button,input,textarea,select').forEach(e=>e.disabled=true);message('Zapisywanie uwagi w Base…');
-      if(final!==s.raw){
-        noteAnchor().click();const textarea=await waitFor(()=>document.querySelector('#oms_info_form textarea#admin_comments'));
-        if(textarea.value!==s.raw)throw Error('Nowsza uwaga w formularzu Base. Nie zapisano zmian.');
-        textarea.value=final;textarea.dispatchEvent(new Event('input',{bubbles:true}));textarea.dispatchEvent(new Event('change',{bubbles:true}));
-        const form=textarea.closest('form');if(form.id!=='oms_info_form')throw Error('Nierozpoznany formularz Base.');
-        const submit=form.querySelector('input[type="submit"][value="Zapisz"]');if(!submit)throw Error('Nie znaleziono zapisu uwagi.');
-        submit.click();await waitFor(()=>{const a=noteAnchor();return a&&(a.textContent==='...'? '':a.textContent)===final;});
-      }
+      await saveNoteField(s.rid, s.raw, final);
       message('Uwaga zapisana. Przekazywanie statusu do Base…');
       for(const [id,item]of pending){if(rid()!==s.rid)throw Error('Zwrot się zmienił.');const p=products().find(p=>p.id===id);if(!p)throw Error('Nie znaleziono produktu. Uwaga zapisana; sprawdź status.');p.select.value=TARGET;bypass=true;try{item.fn.apply(item.thisArg,item.args);savedValues.set(id,TARGET);}finally{bypass=false;}}
       pending.clear();s.host.remove();session=null;
