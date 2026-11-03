@@ -1,13 +1,15 @@
 // ==UserScript==
 // @name         Estila · Uwagi do odłożonych w Base
 // @namespace    https://odlozone.estila.com.pl/base-notes
-// @version      0.1.28
+// @version      0.1.29
 // @description  Poprawki przy produktach zwrotu: uwaga przed zmianą statusu. Pilotaż.
 // @match        https://panel.baselinker.com/orders_returns.php*
 // @run-at       document-start
 // @sandbox      raw
 // @grant        none
 // @noframes
+// @downloadURL  https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/Base-uwagi-do-odlozonych.user.js
+// @updateURL    https://raw.githubusercontent.com/mikolajzieba-ui/Stocksell-tampermonkey/main/Base-uwagi-do-odlozonych.user.js
 // ==/UserScript==
 (function () {
   'use strict';
