@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Estila · Uwagi do odłożonych w Base
 // @namespace    https://odlozone.estila.com.pl/base-notes
-// @version      0.1.29
+// @version      0.1.31
 // @description  Poprawki przy produktach zwrotu: uwaga przed zmianą statusu. Pilotaż.
 // @match        https://panel.baselinker.com/orders_returns.php*
 // @run-at       document-start
@@ -22,10 +22,16 @@
     .filter(name => !/^rozmiar (?:UK|US)$/i.test(name))
     .sort((a, b) => a.localeCompare(b, 'pl'));
   const productStates = ['Nowy', 'Używany', 'Nowy bez metki', 'Nowy z defektem', 'Po zwrocie', 'Powystawowy'];
+  const tagFields = ['Metka papierowa', 'Metka wewnętrzna'];
+  const tagValues = ['Tak', 'Brak'];
   const basicFields = FIELDS.filter(field => !isAllegroParameter(field));
   const norm = s => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/ł/g,'l').trim();
   const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const split = s => s === '' ? [] : s.split('|');
+  function split(text) {
+    const parts = text.split('|');
+    while (parts.at(-1) === '') parts.pop();
+    return parts;
+  }
   function parseNote(raw, products) {
     const parts = split(raw), owned = new Map(), rest = [];
     products.forEach(p => owned.set(p.id, []));
@@ -50,17 +56,34 @@
   }
   function mergeNote(raw, products, changes, restText) {
     const parsed=parseNote(raw,products), replacements=new Map(), removed=new Set(), extra=[];
+    const restChanged = restText !== undefined && restText !== parsed.rest.map(part => part.text).join('|');
+    if (!changes.size && !restChanged) return raw;
+
+    const productParts = new Set();
     for(const p of products){
-      if(!changes.has(p.id))continue;
+      const old=parsed.owned.get(p.id);
+      if(!changes.has(p.id)){
+        for (const part of old) productParts.add(part.text);
+        continue;
+      }
       const value=changes.get(p.id).trim();
       if(/[|:\r\n]/.test(value))throw Error('W uwadze produktu nie używaj znaków | : ani nowych linii.');
-      const old=parsed.owned.get(p.id);
       old.forEach(x=>removed.add(x.index));
-      if(value){const text=(old[0]?.key||p.key)+'-'+value;if(old.length)replacements.set(old[0].index,text);else extra.push(text);}
+      if(value){
+        const text=(old[0]?.key||p.key)+'-'+value;
+        productParts.add(text);
+        if(old.length)replacements.set(old[0].index,text);else extra.push(text);
+      }
     }
-    const out=parsed.parts.flatMap((text,i)=>replacements.has(i)?[replacements.get(i)]:removed.has(i)?[]:[text]);
-    if(restText!==undefined){const unchanged=parsed.rest.map(x=>x.text).join('|');if(restText!==unchanged){const restIds=new Set(parsed.rest.map(x=>x.index));const kept=parsed.parts.flatMap((t,i)=>replacements.has(i)?[replacements.get(i)]:removed.has(i)||restIds.has(i)?[]:[t]);return [...kept,...(restText?split(restText):[]),...extra].join('|');}}
-    return [...out,...extra].join('|');
+    const restIds = new Set(restChanged ? parsed.rest.map(part => part.index) : []);
+    const parts = parsed.parts.flatMap((text, index) => {
+      if (replacements.has(index)) return [replacements.get(index)];
+      return removed.has(index) || restIds.has(index) ? [] : [text];
+    });
+    if (restChanged) parts.push(...split(restText));
+    parts.push(...extra);
+    // The closing separator becomes the delimiter when the next entry is added.
+    return parts.join('|') + (productParts.has(parts.at(-1)) ? '|' : '');
   }
   function clause(text, field, value, parameterChoices = null){
     if(!value.trim()||/[|;:\r\n]/.test(value))throw Error('Podaj wartość bez znaków | ; : i nowych linii.');
@@ -160,7 +183,7 @@
   const css=`
     [data-category-filter]{width:100%}
 [data-split-box] input{display:block;width:100%;margin:4px 0 8px}
-    [data-product-state]{flex:1;min-width:0;max-width:100%}
+    [data-product-state],[data-tag-value]{flex:1;min-width:0;max-width:100%}
   :host{font:15px system-ui;color:#183741}*{box-sizing:border-box}[hidden]{display:none!important}button,input,textarea,select{font:inherit}select{padding:8px;border:1px solid #bdcfd4;border-radius:7px;background:white}button{cursor:pointer;border:1px solid #d1dfe3;background:white;border-radius:8px;padding:8px 12px;color:#183741}button:hover{background:#edf7f6}button:disabled{opacity:.5;cursor:wait}.veil{position:fixed;inset:0;background:#16303e55;display:grid;place-items:center;padding:18px}.box{background:#f5f8f9;border-radius:16px;width:min(950px,100%);max-height:94vh;display:flex;flex-direction:column;box-shadow:0 15px 80px #102d4040}.head,.foot{padding:16px 22px;background:white;display:flex;gap:12px;align-items:center;justify-content:space-between}.head{border-radius:16px 16px 0 0}.foot{border-radius:0 0 16px 16px;flex-wrap:wrap}.body{padding:16px 22px;overflow:auto}h2{margin:0;font-size:21px}p{margin:5px 0;color:#657a82}.card{background:white;border:1px solid #dce7e8;border-radius:10px;padding:14px;margin-bottom:12px}.product{display:flex;gap:12px}.product img{width:48px;height:62px;object-fit:contain}.muted{font-size:12px;color:#627b83}.old{white-space:pre-wrap;background:#f1f5f6;padding:7px;border-radius:5px;margin:8px 0}textarea{width:100%;border:1px solid #bdcfd4;border-radius:7px;padding:9px;min-height:65px}input{border:1px solid #bdcfd4;border-radius:7px;padding:9px;min-width:0}.chips,.entry{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.entry input{flex:1}.entry input:first-child{flex:1.2}.primary{background:#07837f;color:white;border-color:#07837f}.danger{color:#a83c3c}.error{color:#a52c2c;white-space:pre-wrap}.preview{white-space:pre-wrap;overflow-wrap:anywhere;background:#eaf5f3;padding:10px;border-radius:8px}summary{cursor:pointer}label{display:block;margin-top:8px;font-size:13px}.count{font-size:12px}.small{font-size:12px}.title{flex:1}[data-defect-box]{padding:12px;margin-top:8px;background:#f5f8f9;border-radius:8px}[data-defect-box] .chips{margin:4px 0 8px}[data-defect-box] .chips button{padding:5px 9px}[data-scope]{width:100%}[data-defect-add]{margin-top:8px}`;
   const defectPresets = [
     ['Wada', ['Brak paska', 'Zabrudzone podeszwy', 'Delikatne ślady użytkowania', 'Ślady użytkowania',
@@ -210,6 +233,9 @@
     card.querySelector('[data-manual-parameter]').hidden = editor !== 'parameter' || card.querySelector('[data-product-parameters]').value !== MANUAL_PARAMETER;
     card.querySelector('[data-category-box]').hidden = editor !== 'category';
     card.querySelector('[data-state-box]').hidden = editor !== 'state';
+    card.querySelectorAll('[data-tag-box]').forEach(box => {
+      box.hidden = editor !== box.dataset.tagBox;
+    });
     card.querySelector('[data-custom-box]').hidden = editor !== 'custom';
     card.querySelector('[data-defect-box]').hidden = editor !== 'defect';
     card.querySelector('[data-scope-box]').hidden = editor !== 'scope';
@@ -261,6 +287,31 @@
     update();
     return true;
   }
+  function addTag(select) {
+    if (!tagValues.includes(select.value)) {
+      message('Wybierz wartość metki z listy.', true);
+      return false;
+    }
+    const card = select.closest('.card');
+    const note = card.querySelector('[data-note]');
+    note.value = clause(note.value, select.dataset.tagValue, select.value);
+    card.querySelector('[data-mode]').value = 'edit';
+    select.value = '';
+    update();
+    return true;
+  }
+  function tagEditor(field) {
+    return `<div data-tag-box="${esc(field)}" hidden>
+      <label>${esc(field)}</label>
+      <div class="entry">
+        <select data-tag-value="${esc(field)}" aria-label="${esc(field)}">
+          <option value="">Wybierz wartość…</option>
+          ${tagValues.map(value => `<option>${value}</option>`).join('')}
+        </select>
+        <button type="button" data-tag-add>Dodaj</button>
+      </div>
+    </div>`;
+  }
   function onlyDefectLocation(text) {
     let remaining = norm(text);
     if (!remaining) return false;
@@ -301,8 +352,8 @@
             </select>
             <button type="button" data-state-add>Dodaj</button>
           </div>
-        </div><div data-custom-box hidden><label>Treść uwagi</label><textarea data-custom aria-label="Własna poprawka" placeholder="Wpisz treść uwagi"></textarea><button data-custom-add type="button">Dodaj</button></div>${defectEditor()}${splitEditor()}<div class="entry" data-helper><input data-field list="fields" placeholder="Znajdź pole podstawowe…" aria-label="Pole poprawki"><select data-product-parameters aria-label="Nazwa parametru" hidden disabled><option value="">Wybierz parametr</option></select><input data-manual-parameter placeholder="Wpisz nazwę parametru…" aria-label="Własna nazwa parametru" hidden><input data-value placeholder="Prawidłowa wartość…" aria-label="Wartość poprawki"><button data-add>Dodaj</button></div></article>`;
-      }).join('')}${group&&all.some(p=>!wanted.has(p.id)&&eligible(p))?`<div class="entry"><select id="more-product" aria-label="Kolejny produkt"><option value="">Wybierz inny produkt już odłożony…</option>${all.filter(p=>!wanted.has(p.id)&&eligible(p)).map(p=>`<option value="${esc(p.id)}">${esc(p.name)} · ${esc(p.key)}</option>`).join('')}</select><button id="more-add" type="button">Dodaj uwagi do innego odłożonego produktu</button></div>`:''}<datalist id="fields">${basicFields.filter(field => !['kategoria','stan'].includes(field.prefix)).map(f=>`<option value="${esc(f.label)}"></option>`).join('')}</datalist><details ${parsed.rest.some(x=>x.text.trim())?'open':''} ${parsed.rest.some(x=>x.text.trim())?'':'hidden'}><summary>Stary tekst bez przypisanego produktu</summary><p class="small">Base zawiera ten tekst, ale nie wiadomo, którego produktu dotyczy. Wybierz, czy go zachować, poprawić, usunąć lub przypisać.</p><textarea id="rest">${esc(parsed.rest.map(x=>x.text).join('|'))}</textarea><div class="entry"><select id="assign-product" aria-label="Produkt dla starego tekstu">${selected.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select><button id="assign-rest">Przypisz tekst do produktu</button><button id="clear-rest" class="danger">Usuń ten tekst</button></div></details><label>Podgląd uwagi do zapisania w Base</label><div class="preview" id="preview"></div><div class="count" id="count"></div><p id="message" role="status"></p></main><footer class="foot"><span class="muted">${pending.size?'Najpierw zapis uwagi, potem ręcznie wybrana zmiana statusu.':'Zapisujesz tylko uwagi. Statusy produktów pozostają bez zmian.'}</span><button class="primary" id="save">Zapisz uwagi${pending.size?' i status':''}</button></footer></section></div>`;
+        </div>${tagFields.map(tagEditor).join('')}<div data-custom-box hidden><label>Treść uwagi</label><textarea data-custom aria-label="Własna poprawka" placeholder="Wpisz treść uwagi"></textarea><button data-custom-add type="button">Dodaj</button></div>${defectEditor()}${splitEditor()}<div class="entry" data-helper><input data-field list="fields" placeholder="Znajdź pole podstawowe…" aria-label="Pole poprawki"><select data-product-parameters aria-label="Nazwa parametru" hidden disabled><option value="">Wybierz parametr</option></select><input data-manual-parameter placeholder="Wpisz nazwę parametru…" aria-label="Własna nazwa parametru" hidden><input data-value placeholder="Prawidłowa wartość…" aria-label="Wartość poprawki"><button data-add>Dodaj</button></div></article>`;
+      }).join('')}${group&&all.some(p=>!wanted.has(p.id)&&eligible(p))?`<div class="entry"><select id="more-product" aria-label="Kolejny produkt"><option value="">Wybierz inny produkt już odłożony…</option>${all.filter(p=>!wanted.has(p.id)&&eligible(p)).map(p=>`<option value="${esc(p.id)}">${esc(p.name)} · ${esc(p.key)}</option>`).join('')}</select><button id="more-add" type="button">Dodaj uwagi do innego odłożonego produktu</button></div>`:''}<datalist id="fields">${basicFields.filter(field => !['kategoria','stan'].includes(field.prefix) && !tagFields.includes(field.label)).map(f=>`<option value="${esc(f.label)}"></option>`).join('')}</datalist><details ${parsed.rest.some(x=>x.text.trim())?'open':''} ${parsed.rest.some(x=>x.text.trim())?'':'hidden'}><summary>Stary tekst bez przypisanego produktu</summary><p class="small">Base zawiera ten tekst, ale nie wiadomo, którego produktu dotyczy. Wybierz, czy go zachować, poprawić, usunąć lub przypisać.</p><textarea id="rest">${esc(parsed.rest.map(x=>x.text).join('|'))}</textarea><div class="entry"><select id="assign-product" aria-label="Produkt dla starego tekstu">${selected.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select><button id="assign-rest">Przypisz tekst do produktu</button><button id="clear-rest" class="danger">Usuń ten tekst</button></div></details><label>Podgląd uwagi do zapisania w Base</label><div class="preview" id="preview"></div><div class="count" id="count"></div><p id="message" role="status"></p></main><footer class="foot"><span class="muted">${pending.size?'Najpierw zapis uwagi, potem ręcznie wybrana zmiana statusu.':'Zapisujesz tylko uwagi. Statusy produktów pozostają bez zmian.'}</span><button class="primary" id="save">Zapisz uwagi${pending.size?' i status':''}</button></footer></section></div>`;
       document.body.append(host);shadow.querySelector('#cancel').onclick=cancel;if(shadow.querySelector('#more-add')){shadow.querySelector('#more-add').onclick=addProduct;shadow.querySelector('#more-product').addEventListener('focus',refreshMore);}shadow.querySelector('#assign-rest').onclick=assignRest;shadow.querySelector('#clear-rest').onclick=()=>{shadow.querySelector('#rest').value='';update();};
       shadow.querySelectorAll('[data-quick]').forEach(button => button.onclick = () => {
         const card = button.closest('.card');
@@ -315,6 +366,11 @@
         if (button.dataset.quick === 'Stan') {
           setEditor(card, 'state');
           card.querySelector('[data-product-state]').focus();
+          return;
+        }
+        if (tagFields.includes(button.dataset.quick)) {
+          setEditor(card, button.dataset.quick);
+          card.querySelector('[data-tag-box]:not([hidden]) select').focus();
           return;
         }
         if (button.dataset.quick === 'Wada') {
@@ -379,6 +435,9 @@
       });
       shadow.querySelectorAll('[data-split-add]').forEach(button => button.onclick = () => addSplit(button.closest('.card')));
       shadow.querySelectorAll('[data-state-add]').forEach(button => button.onclick = () => addState(button.closest('.card')));
+      shadow.querySelectorAll('[data-tag-add]').forEach(button => {
+        button.onclick = () => addTag(button.closest('[data-tag-box]').querySelector('select'));
+      });
       shadow.querySelectorAll('[data-defect-add]').forEach(button => button.onclick = () => addDefect(button.closest('.card')));
       shadow.querySelectorAll('[data-custom-add]').forEach(b=>b.onclick=()=>addCustom(b.closest('.card')));
       shadow.querySelectorAll('[data-clear]').forEach(b=>b.onclick=()=>{b.closest('.card').querySelector('[data-mode]').value='delete';update();});
@@ -392,7 +451,7 @@
             add.disabled = true;
             card.querySelector('[data-category-filter]').value = '';
             card.querySelector('[data-category-status]').textContent = '';
-            card.querySelectorAll('[data-note],[data-value],[data-custom],[data-defect],[data-scope],[data-product-state],[data-manual-parameter],[data-split-box] input').forEach(input => {
+            card.querySelectorAll('[data-note],[data-value],[data-custom],[data-defect],[data-scope],[data-product-state],[data-tag-value],[data-manual-parameter],[data-split-box] input').forEach(input => {
               input.value = '';
             });
 
@@ -415,11 +474,11 @@
     try{all=currentSelection(s);if(noteValue()!==s.raw)throw Error('Uwaga w Base się zmieniła. Otwórz nakładkę ponownie, aby zachować nowszy zapis.');}catch(e){message(e.message,true);return;}
     const matches=all.filter(p=>p.id===id),p=matches.length===1?matches[0]:null;
     if(!s.group||!p||!eligible(p)){refreshMore();message('Ten produkt nie ma statusu Odłożone - do wystawienia. Wybierz status ręcznie w Base.',true);return;}
-    const stored=s.selected.map(p=>{const e=s.shadow.querySelector(`[data-note="${p.id}"]`),card=e.closest('.card');return {id:p.id,text:e.value,mode:card.querySelector('[data-mode]').value,field:card.querySelector('[data-field]').value,parameter:card.querySelector('[data-product-parameters]').value,manualParameter:card.querySelector('[data-manual-parameter]').value,value:card.querySelector('[data-value]').value,helperMode:card.querySelector('[data-helper]').dataset.mode,categoryOpen:!card.querySelector('[data-category-box]').hidden,stateOpen:!card.querySelector('[data-state-box]').hidden,productState:card.querySelector('[data-product-state]').value,categoryFilter:card.querySelector('[data-category-filter]').value,custom:card.querySelector('[data-custom]').value,customOpen:!card.querySelector('[data-custom-box]').hidden,defectOpen:!card.querySelector('[data-defect-box]').hidden,defect:card.querySelector('[data-defect]').value,scope:card.querySelector('[data-scope]').value,scopeOpen:!card.querySelector('[data-scope-box]').hidden,splitOpen:!card.querySelector('[data-split-box]').hidden,splitValues:[...card.querySelectorAll('[data-split-box] input')].map(input=>input.value)};});
+    const stored=s.selected.map(p=>{const e=s.shadow.querySelector(`[data-note="${p.id}"]`),card=e.closest('.card');return {id:p.id,text:e.value,mode:card.querySelector('[data-mode]').value,field:card.querySelector('[data-field]').value,parameter:card.querySelector('[data-product-parameters]').value,manualParameter:card.querySelector('[data-manual-parameter]').value,value:card.querySelector('[data-value]').value,helperMode:card.querySelector('[data-helper]').dataset.mode,categoryOpen:!card.querySelector('[data-category-box]').hidden,stateOpen:!card.querySelector('[data-state-box]').hidden,productState:card.querySelector('[data-product-state]').value,tagEditor:card.querySelector('[data-tag-box]:not([hidden])')?.dataset.tagBox,tagValues:[...card.querySelectorAll('[data-tag-value]')].map(select=>select.value),categoryFilter:card.querySelector('[data-category-filter]').value,custom:card.querySelector('[data-custom]').value,customOpen:!card.querySelector('[data-custom-box]').hidden,defectOpen:!card.querySelector('[data-defect-box]').hidden,defect:card.querySelector('[data-defect]').value,scope:card.querySelector('[data-scope]').value,scopeOpen:!card.querySelector('[data-scope-box]').hidden,splitOpen:!card.querySelector('[data-split-box]').hidden,splitValues:[...card.querySelectorAll('[data-split-box] input')].map(input=>input.value)};});
     const rest=s.shadow.querySelector('#rest').value;
     // Adding a note never changes eligibility or queues a status request.
     const ids=[...s.selected.map(p=>p.id),id];s.host.remove();session=null;open(ids);
-    if(!session)return;for(const row of stored){const e=session.shadow.querySelector(`[data-note="${row.id}"]`),card=e.closest('.card');showParameterChoices(card,offlineParameters);e.value=row.text;card.querySelector('[data-mode]').value=row.mode;card.querySelector('[data-field]').value=row.field;card.querySelector('[data-product-parameters]').value=row.parameter;card.querySelector('[data-manual-parameter]').value=row.manualParameter;card.querySelector('[data-value]').value=row.value;card.querySelector('[data-custom]').value=row.custom;setEditor(card,row.helperMode||'helper');const filter=card.querySelector('[data-category-filter]');filter.value=row.categoryFilter;card.querySelector('[data-category-add]').disabled=!filter.value.trim();card.querySelector('[data-product-state]').value=row.productState;setEditor(card,row.categoryOpen?'category':row.stateOpen?'state':row.customOpen?'custom':row.defectOpen?'defect':row.scopeOpen?'scope':row.splitOpen?'split':row.helperMode||'helper');card.querySelector('[data-defect]').value=row.defect;card.querySelector('[data-scope]').value=row.scope;card.querySelectorAll('[data-split-box] input').forEach((input,index)=>input.value=row.splitValues[index]);}session.shadow.querySelector('#rest').value=rest;update();
+    if(!session)return;for(const row of stored){const e=session.shadow.querySelector(`[data-note="${row.id}"]`),card=e.closest('.card');showParameterChoices(card,offlineParameters);e.value=row.text;card.querySelector('[data-mode]').value=row.mode;card.querySelector('[data-field]').value=row.field;card.querySelector('[data-product-parameters]').value=row.parameter;card.querySelector('[data-manual-parameter]').value=row.manualParameter;card.querySelector('[data-value]').value=row.value;card.querySelector('[data-custom]').value=row.custom;setEditor(card,row.helperMode||'helper');const filter=card.querySelector('[data-category-filter]');filter.value=row.categoryFilter;card.querySelector('[data-category-add]').disabled=!filter.value.trim();card.querySelector('[data-product-state]').value=row.productState;setEditor(card,row.categoryOpen?'category':row.stateOpen?'state':row.tagEditor?row.tagEditor:row.customOpen?'custom':row.defectOpen?'defect':row.scopeOpen?'scope':row.splitOpen?'split':row.helperMode||'helper');card.querySelectorAll('[data-tag-value]').forEach((select,index)=>select.value=row.tagValues[index]);card.querySelector('[data-defect]').value=row.defect;card.querySelector('[data-scope]').value=row.scope;card.querySelectorAll('[data-split-box] input').forEach((input,index)=>input.value=row.splitValues[index]);}session.shadow.querySelector('#rest').value=rest;update();
   }
   function message(text,error=false){if(session){const e=session.shadow.querySelector('#message');e.textContent=text;e.className=error?'error':'';}}
   function add(card) {
@@ -516,6 +575,9 @@
       currentSelection(s);
       for (const card of s.shadow.querySelectorAll('.card')) {
         if (card.querySelector('[data-mode]').value === 'delete') continue;
+        for (const select of card.querySelectorAll('[data-tag-value]')) {
+          if (select.value && !addTag(select)) return;
+        }
         if (!card.querySelector('[data-category-box]').hidden && !card.querySelector('[data-category-add]').disabled && !addCategory(card)) return;
         if (!card.querySelector('[data-state-box]').hidden && card.querySelector('[data-product-state]').value && !addState(card)) return;
         const manualParameter = card.querySelector('[data-manual-parameter]');
