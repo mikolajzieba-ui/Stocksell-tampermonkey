@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         StockSell - pakiet usprawnień
 // @namespace    http://tampermonkey.net/
-// @version      1.6.4
+// @version      1.6.6
 // @description  Opisy Allegro, podsumowanie batchy, lepsze boxy, analiza Pick bez Pack/Match, etykiety błędów i druk pełnych miejsc magazynowych z ofert. Obsługa OLX tymczasowo wyłączona.
 // @match        https://stocksell.io/*
 // @match        https://*.stocksell.io/*
@@ -15,8 +15,8 @@
 // @connect      allegro.pl
 // @connect      estila.com.pl
 // @connect      olx.estila.com.pl
-// @downloadURL  https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Stocksell-usprawnienia-pakowanie.user.js
-// @updateURL    https://github.com/mikolajzieba-ui/Stocksell-tampermonkey/raw/refs/heads/main/Stocksell-usprawnienia-pakowanie.user.js
+// @updateURL    https://dodatki.estila.com.pl/tampermonkey/download.php/stocksell-pakowanie.user.js?key=1.af52c4510be2e86dc3e63aff9860773edcfe0bfbc37bc4081df625ab9fcd238e
+// @downloadURL  https://dodatki.estila.com.pl/tampermonkey/download.php/stocksell-pakowanie.user.js?key=1.af52c4510be2e86dc3e63aff9860773edcfe0bfbc37bc4081df625ab9fcd238e
 // ==/UserScript==
 
 (function () {
@@ -1155,6 +1155,100 @@
     })();
 
     // ---------------------------------------------------------------------
+    // ---------------------------------------------------------------------
+    // MODUL 3B: przypomnienie o zrzuceniu kuwet z batcha na pakowaniu
+    // ---------------------------------------------------------------------
+    (function packingToteWarningModule() {
+        const WARNING_ID = 'ss-packing-tote-warning';
+        const WARNING_TEXT = 'SPRAWDŹ CZY ZRZUCIŁAŚ/ZRZUCIŁEŚ KUWETY Z BATCHA';
+        const IGNORED_SCOPE = [
+            'aside', 'nav', 'header', 'app-sidenav', 'app-header',
+            'mat-sidenav', '.mat-sidenav', '.mat-drawer', '.sidenav', '.sidebar',
+            'mat-nav-list', '.mat-nav-list', '.mat-mdc-nav-list',
+            'mat-list-item', '.mat-list-item', '.mat-mdc-list-item',
+            '[role="navigation"]', '[role="dialog"]', '.cdk-overlay-container',
+            'a', 'button', '#' + WARNING_ID
+        ].join(', ');
+
+        GM_addStyle(`
+            #${WARNING_ID} {
+                display:block !important;
+                width:100% !important;
+                margin:6px 0 12px !important;
+                color:#d32f2f !important;
+                font-family:Roboto,Arial,sans-serif !important;
+                font-size:16px !important;
+                font-weight:700 !important;
+                line-height:1.35 !important;
+                text-align:center !important;
+                letter-spacing:.3px !important;
+            }
+        `);
+
+        function isPackingView() {
+            return /^\/packing\/batch\/packing(?:-singles)?\/?$/.test(location.pathname);
+        }
+
+        function isPackingHeadingText(text) {
+            return /^pakowanie\s+(?:wielosztuk|jednosztuk)$/i.test((text || '').replace(/\s+/g, ' ').trim());
+        }
+
+        function findPackingHeading() {
+            const candidates = document.querySelectorAll(
+                'h1, h2, h3, h4, mat-card-title, .mat-card-title, .mat-mdc-card-title, div, p, span'
+            );
+            for (const element of candidates) {
+                if (element.closest(IGNORED_SCOPE)) continue;
+                if (!isPackingHeadingText(element.textContent)) continue;
+                const hasMatchingChild = Array.from(element.children).some(
+                    child => child.id !== WARNING_ID && isPackingHeadingText(child.textContent)
+                );
+                if (hasMatchingChild) continue;
+                return element.closest(
+                    'mat-card-header, .mat-card-header, .mat-mdc-card-header, h1, h2, h3, h4, mat-card-title, .mat-card-title, .mat-mdc-card-title'
+                ) || element;
+            }
+            return null;
+        }
+
+        function updatePackingWarning() {
+            const existing = document.getElementById(WARNING_ID);
+            if (!isPackingView()) {
+                existing?.remove();
+                return;
+            }
+            const heading = findPackingHeading();
+            if (!heading) {
+                existing?.remove();
+                return;
+            }
+            const warning = existing || document.createElement('div');
+            warning.id = WARNING_ID;
+            warning.dataset.ssLabelUi = 'tote-warning';
+            if (warning.textContent !== WARNING_TEXT) {
+                warning.textContent = WARNING_TEXT;
+            }
+            if (heading.nextElementSibling !== warning) {
+                heading.insertAdjacentElement('afterend', warning);
+            }
+        }
+
+        let scheduled = false;
+        const observer = new MutationObserver(() => {
+            if (scheduled) return;
+            scheduled = true;
+            requestAnimationFrame(() => {
+                scheduled = false;
+                updatePackingWarning();
+            });
+        });
+
+        updatePackingWarning();
+        observer.observe(document.body, { childList: true, subtree: true });
+        setInterval(updatePackingWarning, 1000);
+    })();
+
+    // ---------------------------------------------------------------------
     // MODUL 4: drukowanie pelnych miejsc magazynowych z ofert
     // ---------------------------------------------------------------------
     (function offerLocationsPrintModule() {
@@ -1766,7 +1860,7 @@
     // MODUŁ 6: etykieta błędu zamówienia 100 x 150 mm z kodem Code 128
     // ---------------------------------------------------------------------
     (function orderErrorLabelModule() {
-        const LABEL_VERSION = '1.6.4';
+        const LABEL_VERSION = '1.6.6';
         const CODE_128_PATTERNS = [
             '212222', '222122', '222221', '121223', '121322', '131222',
             '122213', '122312', '132212', '221213', '221312', '231212',
