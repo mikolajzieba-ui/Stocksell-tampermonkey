@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Base.com - Zrzeczenie przesyłki PDF
 // @namespace    stocksell.zrzeczenie
-// @version      1.5.6
+// @version      1.5.8
 // @description  Zrzeczenie PDF oraz kalkulator rabatów z zapisem do Google Sheets.
 // @match        https://panel.baselinker.com/*
 // @match        https://panel.base.com/*
@@ -47,7 +47,7 @@ however, cannot be released under any other type of license.  The
 requirement for fonts to remain under this license does not apply to
 any document created using the fonts or their derivatives.
 
-
+ 
 
 DEFINITIONS
 "Font Software" refers to the set of files released by the Copyright
@@ -104,11 +104,11 @@ Software, subject to the following conditions:
    Software.
 
 
-
+ 
 TERMINATION
 This license becomes null and void if any of the above conditions are not met.
 
-
+ 
 
 DISCLAIMER
 THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
@@ -722,7 +722,7 @@ const DiscountRules = (() => {
         validateItem(item);
         const c = constants(values);
         if (!['PL', 'International'].includes(context.market) || !yesNo.includes(context.smart)) throw new Error('Brakuje rynku lub informacji o Smart.');
-        const j = context.smart === 'Tak' ? c[0] : context.market === 'International' ? c[2] : c[1];
+        const j = context.smart === 'Tak' && !context.after14Days ? c[0] : context.market === 'International' ? c[2] : c[1];
         const k = item.disposition === 'Szycie' ? c[3] : item.disposition === 'Szewc' ? c[4] : 0;
         const l = item.disposition === 'Duża wada' ? c[5] : item.disposition === '3 konto' ? (item.type === 'Obuwie' ? c[6] : c[7]) : 0;
         const m = j + k - l;
@@ -946,7 +946,7 @@ function discountDialog(title, wide = false) {
       .result{margin-top:12px;background:#e9f6f2;border-radius:8px;padding:12px 14px}.result strong{font-size:20px;color:#006c60}.result:empty,.hint:empty{display:none}.hint{margin-top:8px}.error{color:#a52525;margin-top:12px;white-space:pre-line}.status{padding:10px 12px;background:#eef2f7;border-radius:8px;font-size:13px}.total{margin-top:14px;font-size:15px;font-weight:700}.warning{color:#845a07}.link{color:#0667aa}.settings .field{margin-top:14px}.locked{opacity:.72}@media(max-width:800px){.fields{grid-template-columns:1fr 1fr}}@media(max-width:480px){.fields{grid-template-columns:1fr}dialog{padding:16px}}`;
     style.textContent += '\nhtml{color-scheme:light;background:#f8fafc}body{margin:0}dialog{position:static;box-sizing:border-box;width:100%;max-height:none;margin:0;overflow:visible;box-shadow:none}.field textarea{font:14px Arial,sans-serif;padding:10px;border:1px solid #b6c5d4;border-radius:6px;resize:vertical;min-height:60px}.comment{margin-top:12px}.currency-input{display:flex;gap:6px}.currency-input input{min-width:70px}.currency-input select{width:90px}.rate{margin-bottom:12px}.rate button{padding:5px 10px;font-size:12px}textarea:focus-visible{outline:3px solid #6cadff;outline-offset:2px}';
     frameDocument.head.append(style);
-    style.textContent += '\n.calculator{display:flex;flex-direction:column;max-height:var(--discount-window-height);padding:0;overflow:hidden}.calculator-body{min-height:0;overflow:auto;overscroll-behavior:contain;padding:24px}.calculator-footer{flex:none;background:#f8fafc;border-top:1px solid #cad4df;padding:12px 24px 16px;box-shadow:0 -5px 15px #1724380a}.calculator-footer .total{margin:0 0 8px}.calculator-footer .actions{margin-top:10px}.calculator-footer .status{padding:7px 10px}.calculator-footer .error{max-height:12vh;overflow:auto;margin-top:6px}.calculator-footer .error:empty{display:none}.percent-input{display:flex;align-items:center;gap:8px;font-size:12px}.percent-input input{min-width:0;flex:1}.percent-input span{white-space:nowrap}@media(max-width:600px){.calculator-body{padding:16px}.calculator-footer{padding:10px 16px}.calculator-footer .actions{gap:6px}.calculator-footer button{padding:9px 10px;font-size:12px}}';
+    style.textContent += '\n.calculator{display:flex;flex-direction:column;max-height:var(--discount-window-height);padding:0;overflow:hidden}.calculator-body{min-height:0;overflow:auto;overscroll-behavior:contain;padding:24px}.calculator-footer{flex:none;background:#f8fafc;border-top:1px solid #cad4df;padding:12px 24px 16px;box-shadow:0 -5px 15px #1724380a}.calculator-footer .total{margin:0 0 8px}.calculator-footer .actions{margin-top:10px}.calculator-footer .status{padding:7px 10px}.calculator-footer .error{max-height:12vh;overflow:auto;margin-top:6px}.calculator-footer .error:empty{display:none}.percent-input{display:flex;align-items:center;gap:8px;font-size:12px}.percent-input input{min-width:0;flex:1}.percent-input span{white-space:nowrap}.after-14-days{margin:10px 0 6px;padding:10px 14px;border:1px solid #d5dfe8;border-radius:10px;background:#fff;align-items:center}@media(max-width:600px){.calculator-body{padding:16px}.calculator-footer{padding:10px 16px}.calculator-footer .actions{gap:6px}.calculator-footer button{padding:9px 10px;font-size:12px}}';
     const dialog = frameDocument.createElement('dialog');
     dialog.open = true;
     dialog.setAttribute('aria-modal', 'true');
@@ -1165,7 +1165,7 @@ async function openDiscountCalculator() {
     const legacyPending = await GM_getValue('bok-discount-pending-v1', null);
     if (!pending && legacyPending) pending = { ...legacyPending, action: 'append', legacy: true };
     let working = false, loading = false, loadingSeconds = 0, ready = false, closed = false, server = null, calculation = null, fatal = '';
-    let preserveEditsAfterPending = false, loadFailed = false;
+    let preserveEditsAfterPending = false, loadFailed = false, after14Dirty = false;
     let fx = currency === 'PLN' ? { currency, rate: 1, date: '', table: '' } : null;
     add('p', `${ctx.source.startsWith('return') ? 'Zwrot' : 'Zamówienie'} ${ctx.source.split(':')[1]} · ${ctx.login}`, body, 'meta');
     add('p', `Pracownik: ${ctx.employee}`, body, 'meta');
@@ -1174,6 +1174,13 @@ async function openDiscountCalculator() {
     const rateBox = add('div', '', body, 'meta rate');
     const rateText = add('span', '', rateBox);
     const refresh = add('button', 'Odśwież kurs', rateBox); refresh.hidden = currency === 'PLN';
+    const after14Label = add('label', '', body, 'choose after-14-days');
+    const after14Days = add('input', '', after14Label);
+    after14Days.type = 'checkbox';
+    after14Days.setAttribute('aria-label', 'Minęło ponad 14 dni od otrzymania zwrotu');
+    add('span', 'Minęło ponad 14 dni od otrzymania zwrotu', after14Label, 'name');
+    add('span', `(koszt wysyłki: ${moneyDiscount(ctx.market === 'International' ? LOCAL_DISCOUNT_CONSTANTS[2] : LOCAL_DISCOUNT_CONSTANTS[1])})`, after14Label, 'meta');
+    const currentContext = () => ({ ...ctx, after14Days: after14Days.checked });
     const total = add('div', '', footer, 'total'); total.setAttribute('aria-live', 'polite');
     const status = add('div', '', footer, 'status'); status.setAttribute('role', 'status');
     const list = add('div', '', body, 'list');
@@ -1219,13 +1226,15 @@ async function openDiscountCalculator() {
     const retry = add('button', 'Dokończ poprzedni zapis', actions, 'primary');
     const reload = add('button', 'Ponów wczytywanie', actions);
     function setControls() {
+        const activeCtx = currentContext();
+        after14Days.disabled = working || !!pending;
         for (const c of controls) {
             c.checked.disabled = working || !!pending || !!c.product.issue || !!c.issue;
             [c.type, c.resale, c.disposition, c.final, c.finalCurrency, c.percent, c.comment].forEach(el => { el.disabled = working || !!pending || !c.checked.checked; });
         }
         const allowed = !working && !loading && !pending && ready && calculation && !fatal;
         draft.disabled = !allowed;
-        send.disabled = !allowed || calculation.items.some(item => item.finalAmount === null && DiscountRules.round(DiscountRules.amounts(item, currency, fx, ctx).result.maximum) > DiscountRules.round(item.originalPrice * fx.rate));
+        send.disabled = !allowed || calculation.items.some(item => item.finalAmount === null && DiscountRules.round(DiscountRules.amounts(item, currency, fx, activeCtx).result.maximum) > DiscountRules.round(item.originalPrice * fx.rate));
         retry.hidden = !pending; retry.disabled = working || loading || !pending;
         settings.disabled = working || loading || !!pending; cancel.disabled = working;
         refresh.disabled = working || loading || !!pending || !ready;
@@ -1262,7 +1271,7 @@ async function openDiscountCalculator() {
     function recalculate() {
         calculation = null;
         let sum = 0, computed = 0;
-        const selected = controls.filter(c => c.checked.checked), items = [];
+        const selected = controls.filter(c => c.checked.checked), items = [], activeCtx = currentContext();
         rateText.textContent = fx ? currency === 'PLN' ? 'Obliczenia i zapis w PLN. ' : `Kurs NBP: 1 ${currency} = ${fx.rate.toLocaleString('pl-PL', { maximumFractionDigits: 8 })} PLN · tabela ${fx.table}, ${fx.date}. ` : 'Kurs NBP zostanie pobrany po połączeniu. ';
         controls.forEach(c => {
             c.result.replaceChildren(); c.hint.textContent = c.issue; c.hint.className = c.issue ? 'error hint' : 'meta hint';
@@ -1280,7 +1289,7 @@ async function openDiscountCalculator() {
                     const item = { id: c.product.id, code: c.product.code, originalPrice: c.product.price, type: c.type.value, resale: c.resale.value,
                         disposition: c.disposition.value, finalAmount: null, finalCurrency: c.finalCurrency.value, comment: c.comment.value, calculationDate: c.calculationDate };
                     // Najpierw maksimum, następnie walidacja wpisywanej kwoty finalnej.
-                    const amount = DiscountRules.amounts(item, currency, fx, ctx);
+                    const amount = DiscountRules.amounts(item, currency, fx, activeCtx);
                     computed++; sum += amount.result.maximum;
                     add('strong', `${moneyDiscount(amount.result.maximum)}${currency !== 'PLN' ? ' ≈ ' + moneyDiscount(amount.maximumOrder, currency) : ''} · ${(amount.result.percent * 100).toLocaleString('pl-PL', { maximumFractionDigits: 2 })}%`, c.result);
                     add('div', `Maksymalny rabat · koszt zwrotu: ${moneyDiscount(amount.result.returnCost)} · naprawa: ${moneyDiscount(amount.result.repairCost)} · odrzut: ${moneyDiscount(amount.result.recovery)}`, c.result, 'meta');
@@ -1291,7 +1300,7 @@ async function openDiscountCalculator() {
                         item.finalAmount = parseDiscountAmount(c.final.value, true);
                     }
                     if (item.comment.length > 2000) throw new Error('Komentarz może mieć maksymalnie 2000 znaków.');
-                    const finalAmounts = DiscountRules.amounts(item, currency, fx, ctx);
+                    const finalAmounts = DiscountRules.amounts(item, currency, fx, activeCtx);
                     if (finalAmounts.finalDiscount !== null) {
                         add('div', `Finalny rabat: ${moneyDiscount(finalAmounts.finalDiscount)}${currency !== 'PLN' ? ' ≈ ' + moneyDiscount(finalAmounts.finalOrder, currency) : ''}`, c.result);
                         if (finalAmounts.finalDiscount > amount.result.maximum + 0.005) add('div', 'Finalny rabat przekracza wyliczone maksimum.', c.result, 'warning');
@@ -1313,6 +1322,13 @@ async function openDiscountCalculator() {
         } catch (error) { errorBox.textContent = error.message; }
         setControls();
     }
+    after14Days.addEventListener('input', () => {
+        after14Dirty = true;
+        controls.forEach(c => {
+            if (c.checked.checked) { c.dirty = true; c.calculationDate = DiscountRules.today(); c.dirtyFields.add('date'); }
+        });
+        recalculate();
+    });
     controls.forEach(c => [c.checked, c.type, c.resale, c.disposition, c.final, c.finalCurrency, c.percent, c.comment].forEach(el => {
         el.addEventListener('input', () => {
             c.dirty = true;
@@ -1342,6 +1358,9 @@ async function openDiscountCalculator() {
         if (response.currency !== currency) throw new Error('Waluta z API Base różni się od otwartego widoku. Odśwież stronę.');
         DiscountRules.validateFx(response.fx, currency);
         server = response; fx = response.fx;
+        if (!refreshFx && !after14Dirty && response.entries.some(e => typeof e.context?.after14Days === 'boolean' || (ctx.smart === 'Tak' && e.context?.smart === 'Nie'))) {
+            after14Days.checked = response.entries.some(e => e.context?.after14Days === true || (ctx.smart === 'Tak' && e.context?.smart === 'Nie'));
+        }
         for (const c of controls) {
             const id = c.product.id.match(/^sale_item_row_(\d+)$/)?.[1];
             const map = response.mapping.find(m => m.sourceProductId === id);
@@ -1357,10 +1376,11 @@ async function openDiscountCalculator() {
             if (refreshFx && c.checked.checked) { c.calculationDate = DiscountRules.today(); c.dirty = true; c.dirtyFields.add('date'); }
         }
         if (response.pending && !pending) {
-            preserveEditsAfterPending = controls.some(c => c.dirty);
+            preserveEditsAfterPending = after14Dirty || controls.some(c => c.dirty);
             pending = { config: connection, ...response.pending };
         }
         if (pending && pending.payload.context.source === ctx.source && !pending.legacy) {
+            if (!after14Dirty && typeof pending.payload.context.after14Days === 'boolean') after14Days.checked = pending.payload.context.after14Days;
             for (const c of controls) {
                 const item = pending.payload.items.find(i => i.id === c.product.id);
                 restoreItem(c, item, !!item);
@@ -1394,15 +1414,16 @@ async function openDiscountCalculator() {
             if (!pending) {
                 assertCurrent(); recalculate();
                 if (!ready || !calculation || fatal) throw new Error('Uzupełnij dane i sprawdź połączenie przed zapisem.');
+                const activeCtx = currentContext();
                 const items = calculation.items.map(item => {
                     if (action !== 'finalize' || item.finalAmount !== null) return item;
-                    const result = DiscountRules.amounts(item, currency, fx, ctx);
+                    const result = DiscountRules.amounts(item, currency, fx, activeCtx);
                     const finalItem = { ...item, finalAmount: DiscountRules.round(result.result.maximum), finalCurrency: 'PLN', finalPercent: null };
-                    DiscountRules.amounts(finalItem, currency, fx, ctx);
+                    DiscountRules.amounts(finalItem, currency, fx, activeCtx);
                     return finalItem;
                 });
                 pending = { action, config: connection, payload: { requestId: crypto.randomUUID(), protocol: 2, version: DiscountRules.version,
-                    revision: server.revision, baseCurrency: server.baseCurrency, context: ctx, fx, items, constants: LOCAL_DISCOUNT_CONSTANTS.slice() } };
+                    revision: server.revision, baseCurrency: server.baseCurrency, context: activeCtx, fx, items, constants: LOCAL_DISCOUNT_CONSTANTS.slice() } };
                 await GM_setValue(PENDING_KEY, pending);
             }
             status.textContent = 'Zapisywanie w Base i sprawdzanie odpowiedzi…';
@@ -1415,7 +1436,7 @@ async function openDiscountCalculator() {
             if (pending.legacy) await GM_setValue('bok-discount-pending-v1', null);
             await GM_setValue(PENDING_KEY, null); pending = null;
             preserveEditsAfterPending = false;
-            if (!keptEdits) controls.forEach(c => { c.dirty = false; c.dirtyFields.clear(); });
+            if (!keptEdits) { after14Dirty = false; controls.forEach(c => { c.dirty = false; c.dirtyFields.clear(); }); }
             working = false;
             if (response.workflow && completedSource === ctx.source) {
                 assertCurrent(); restore(response.workflow, false); recalculate();
