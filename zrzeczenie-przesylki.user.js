@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Base.com - Zrzeczenie przesyłki PDF
 // @namespace    stocksell.zrzeczenie
-// @version      1.5.8
+// @version      1.5.9
 // @description  Zrzeczenie PDF oraz kalkulator rabatów z zapisem do Google Sheets.
 // @match        https://panel.baselinker.com/*
 // @match        https://panel.base.com/*
@@ -766,8 +766,21 @@ const DiscountRules = (() => {
         }
     }
     function amounts(item, currency, fx, context) {
-        validateFx(fx, currency);
         if (typeof item.originalPrice !== 'number' || !Number.isFinite(item.originalPrice) || item.originalPrice <= 0) throw new Error('Nieprawidłowa cena produktu.');
+        if (fx === null && currency !== 'PLN') {
+            validateItem({ ...item, price: item.originalPrice });
+            if (!['PL', 'International'].includes(context.market) || !yesNo.includes(context.smart)) throw new Error('Brakuje rynku lub informacji o Smart.');
+            if (item.finalAmount === null) throw new Error('Brak kursu NBP — wpisz ręcznie kwotę finalnego rabatu.');
+            if (!['PLN', currency].includes(item.finalCurrency) || typeof item.finalAmount !== 'number'
+                || !Number.isFinite(item.finalAmount) || item.finalAmount < 0 || round(item.finalAmount) !== item.finalAmount) throw new Error('Finalny rabat musi być nieujemną kwotą z maksymalnie dwoma miejscami po przecinku.');
+            if (item.finalCurrency === currency && item.finalAmount > item.originalPrice) throw new Error('Finalny rabat nie może być większy od ceny produktu.');
+            const price = round(item.originalPrice);
+            const result = calculate({ ...item, price }, context, fallback);
+            const finalDiscount = round(item.finalAmount);
+            const finalOrder = round(item.finalAmount);
+            return { price, result, finalDiscount, finalOrder, maximumOrder: round(result.maximum), manualFx: true };
+        }
+        validateFx(fx, currency);
         const price = round(item.originalPrice * fx.rate);
         const result = calculate({ ...item, price }, context, fallback);
         let finalDiscount = null, finalOrder = null;
@@ -782,9 +795,13 @@ const DiscountRules = (() => {
     }
     const attribute = amount => '- ' + round(amount).toFixed(2).replace('.', ',');
     function priceInCurrency(originalPrice, currency, finalCurrency, fx) {
-        validateFx(fx, currency);
         if (!['PLN', currency].includes(finalCurrency) || !Number.isFinite(originalPrice) || originalPrice <= 0) throw new Error('Nieprawidłowa cena lub waluta rabatu.');
-        return finalCurrency === currency ? originalPrice : round(originalPrice * fx.rate);
+        if (finalCurrency === currency) {
+            if (fx !== null) validateFx(fx, currency);
+            return originalPrice;
+        }
+        validateFx(fx, currency);
+        return round(originalPrice * fx.rate);
     }
     function percentAmount(originalPrice, currency, finalCurrency, fx, percent) {
         if (typeof percent !== 'number' || !Number.isFinite(percent) || percent < 0 || percent > 100 || round(percent) !== percent) throw new Error('Wpisz procent rabatu od 0 do 100, z maksymalnie dwoma miejscami po przecinku.');
@@ -1233,8 +1250,8 @@ async function openDiscountCalculator() {
             [c.type, c.resale, c.disposition, c.final, c.finalCurrency, c.percent, c.comment].forEach(el => { el.disabled = working || !!pending || !c.checked.checked; });
         }
         const allowed = !working && !loading && !pending && ready && calculation && !fatal;
-        draft.disabled = !allowed;
-        send.disabled = !allowed || calculation.items.some(item => item.finalAmount === null && DiscountRules.round(DiscountRules.amounts(item, currency, fx, activeCtx).result.maximum) > DiscountRules.round(item.originalPrice * fx.rate));
+        draft.disabled = !allowed || (!fx && calculation.items.some(item => item.finalAmount === null));
+        send.disabled = !allowed || calculation.items.some(item => item.finalAmount === null && (!fx || DiscountRules.round(DiscountRules.amounts(item, currency, fx, activeCtx).result.maximum) > DiscountRules.round(item.originalPrice * fx.rate)));
         retry.hidden = !pending; retry.disabled = working || loading || !pending;
         settings.disabled = working || loading || !!pending; cancel.disabled = working;
         refresh.disabled = working || loading || !!pending || !ready;
@@ -1262,7 +1279,7 @@ async function openDiscountCalculator() {
             return value;
         }
         c.percent.value = '';
-        if (/^\d+(?:[.,]\d{1,2})?$/.test(c.final.value.trim()) && fx) {
+        if (/^\d+(?:[.,]\d{1,2})?$/.test(c.final.value.trim()) && (fx || c.finalCurrency.value === currency)) {
             const price = DiscountRules.priceInCurrency(c.product.price, currency, c.finalCurrency.value, fx);
             c.percent.value = String(DiscountRules.round(Number(c.final.value.trim().replace(',', '.')) / price * 100)).replace('.', ',');
         }
@@ -1272,7 +1289,7 @@ async function openDiscountCalculator() {
         calculation = null;
         let sum = 0, computed = 0;
         const selected = controls.filter(c => c.checked.checked), items = [], activeCtx = currentContext();
-        rateText.textContent = fx ? currency === 'PLN' ? 'Obliczenia i zapis w PLN. ' : `Kurs NBP: 1 ${currency} = ${fx.rate.toLocaleString('pl-PL', { maximumFractionDigits: 8 })} PLN · tabela ${fx.table}, ${fx.date}. ` : 'Kurs NBP zostanie pobrany po połączeniu. ';
+        rateText.textContent = fx ? currency === 'PLN' ? 'Obliczenia i zapis w PLN. ' : `Kurs NBP: 1 ${currency} = ${fx.rate.toLocaleString('pl-PL', { maximumFractionDigits: 8 })} PLN · tabela ${fx.table}, ${fx.date}. ` : server?.fxError ? `Brak kursu NBP (${currency}) — wpisz ręcznie kwotę rabatu. ` : 'Kurs NBP zostanie pobrany po połączeniu. ';
         controls.forEach(c => {
             c.result.replaceChildren(); c.hint.textContent = c.issue; c.hint.className = c.issue ? 'error hint' : 'meta hint';
             c.priceLabel.textContent = `Kod: ${c.product.code || 'brak'} · Cena: ${c.product.price === null ? 'brak' : moneyDiscount(c.product.price, currency)}${fx && currency !== 'PLN' ? ' = ' + moneyDiscount(DiscountRules.round(c.product.price * fx.rate)) : ''} · Ilość w Base: ${c.product.quantity}`;
@@ -1283,11 +1300,30 @@ async function openDiscountCalculator() {
             for (const c of selected) {
                 const missing = [!c.type.value && 'typ produktu', !c.resale.value && 'H', !c.disposition.value && 'I'].filter(Boolean);
                 if (missing.length) { c.hint.textContent = 'Uzupełnij: ' + missing.join(', ') + '.'; continue; }
-                if (!fx) { c.hint.textContent = 'Oczekiwanie na kurs NBP. Możesz już wpisać kwotę, procent i komentarz; wynik pojawi się po wczytaniu kursu.'; continue; }
+                if (!fx && (loading || !server)) { c.hint.textContent = 'Oczekiwanie na kurs NBP. Możesz już wpisać kwotę, procent i komentarz; wynik pojawi się po wczytaniu kursu.'; continue; }
                 try {
                     if (c.product.issue || c.issue) throw new Error(c.product.issue || c.issue);
                     const item = { id: c.product.id, code: c.product.code, originalPrice: c.product.price, type: c.type.value, resale: c.resale.value,
                         disposition: c.disposition.value, finalAmount: null, finalCurrency: c.finalCurrency.value, comment: c.comment.value, calculationDate: c.calculationDate };
+                    if (!fx) {
+                        item.finalPercent = synchronizeFinal(c);
+                        if (!c.final.value.trim()) {
+                            c.hint.textContent = 'Brak kursu NBP — wpisz ręcznie kwotę w polu „R · Finalny rabat” lub podaj Rabat % ceny.';
+                            continue;
+                        }
+                        if (!/^\d+(?:[.,]\d{1,2})?$/.test(c.final.value.trim())) throw new Error('Wpisz kwotę finalnego rabatu z maksymalnie dwoma miejscami po przecinku.');
+                        item.finalAmount = parseDiscountAmount(c.final.value, true);
+                        if (item.comment.length > 2000) throw new Error('Komentarz może mieć maksymalnie 2000 znaków.');
+                        const finalAmounts = DiscountRules.amounts(item, currency, null, activeCtx);
+                        computed++; sum += finalAmounts.finalDiscount;
+                        add('strong', `Finalny rabat: ${moneyDiscount(item.finalAmount, item.finalCurrency)}`, c.result);
+                        add('div', `Tryb ręczny (brak kursu NBP) · koszt zwrotu: ${moneyDiscount(finalAmounts.result.returnCost)} · naprawa: ${moneyDiscount(finalAmounts.result.repairCost)} · odrzut: ${moneyDiscount(finalAmounts.result.recovery)}`, c.result, 'meta');
+                        const target = server?.baseCurrency || 'PLN';
+                        const base = target === 'PLN' ? finalAmounts.finalDiscount : finalAmounts.finalOrder;
+                        add('div', `Zapis w Base: ${moneyDiscount(base, item.finalCurrency)} · Atrybuty: ${DiscountRules.attribute(base)} · data obliczenia: ${item.calculationDate}`, c.result, 'meta');
+                        items.push(item);
+                        continue;
+                    }
                     // Najpierw maksimum, następnie walidacja wpisywanej kwoty finalnej.
                     const amount = DiscountRules.amounts(item, currency, fx, activeCtx);
                     computed++; sum += amount.result.maximum;
@@ -1311,7 +1347,9 @@ async function openDiscountCalculator() {
                     items.push(item);
                 } catch (error) { c.hint.textContent = error.message; c.hint.className = 'error hint'; }
             }
-            if (computed) total.textContent = `Obliczono: ${computed} z ${selected.length} · Suma maksymalnych rabatów: ${moneyDiscount(sum)}${currency !== 'PLN' ? ' ≈ ' + moneyDiscount(DiscountRules.round(sum / fx.rate), currency) : ''}`;
+            if (computed) total.textContent = fx
+                ? `Obliczono: ${computed} z ${selected.length} · Suma maksymalnych rabatów: ${moneyDiscount(sum)}${currency !== 'PLN' ? ' ≈ ' + moneyDiscount(DiscountRules.round(sum / fx.rate), currency) : ''}`
+                : `Wpisano ręcznie: ${computed} z ${selected.length} · Suma rabatów: ${moneyDiscount(sum, selected[0]?.finalCurrency.value || currency)}`;
             if (selected.length && items.length === selected.length) calculation = { items };
             if (pending) status.textContent = `Niedokończony zapis (${pending.payload.context.source}). Kliknij „Dokończ poprzedni zapis”. Ponowienie zachowa ten sam identyfikator i dane.${preserveEditsAfterPending ? ' Nowe dane wpisane podczas wczytywania pozostają w formularzu — zapiszesz je osobno po dokończeniu poprzedniej operacji.' : ''}`;
             else if (loading) status.textContent = loadingMessage();
@@ -1356,8 +1394,9 @@ async function openDiscountCalculator() {
     function restore(response, refreshFx) {
         if (response.protocol !== DiscountRules.protocol) throw new Error('Zaktualizuj Apps Script i wdróż nową wersję istniejącego wdrożenia.');
         if (response.currency !== currency) throw new Error('Waluta z API Base różni się od otwartego widoku. Odśwież stronę.');
-        DiscountRules.validateFx(response.fx, currency);
+        if (response.fx !== null || currency === 'PLN') DiscountRules.validateFx(response.fx, currency);
         server = response; fx = response.fx;
+        if (response.fxError) errorBox.textContent = response.fxError;
         if (!refreshFx && !after14Dirty && response.entries.some(e => typeof e.context?.after14Days === 'boolean' || (ctx.smart === 'Tak' && e.context?.smart === 'Nie'))) {
             after14Days.checked = response.entries.some(e => e.context?.after14Days === true || (ctx.smart === 'Tak' && e.context?.smart === 'Nie'));
         }
@@ -1398,13 +1437,36 @@ async function openDiscountCalculator() {
             const view = { currency, products: snapshot.products.map(product => ({
                 id: product.id.match(/^sale_item_row_([1-9]\d*)$/)?.[1], price: product.price,
             })).filter(product => product.id && Number.isFinite(product.price) && product.price > 0) };
-            const response = await discountRequest(connection, 'load', { source: ctx.source, refreshFx, view }, seconds => {
+            const onWait = seconds => {
                 loadingSeconds = seconds;
                 if (!closed && !pending) status.textContent = loadingMessage();
-            });
+            };
+            let response;
+            for (let attempt = 0; attempt < 3; attempt++) {
+                try {
+                    response = await discountRequest(connection, 'load', { source: ctx.source, refreshFx, view }, onWait);
+                    break;
+                } catch (error) {
+                    if (error.code !== 'FX' || attempt === 2 || closed) throw error;
+                }
+            }
             if (closed) return;
             assertCurrent(); restore(response, refreshFx);
-        } catch (error) { if (!closed) { loadFailed = true; errorBox.textContent = error.message; } }
+        } catch (error) {
+            if (!closed) {
+                loadFailed = true;
+                errorBox.textContent = error.message;
+                if (error.code === 'FX' && !server) {
+                    restore({
+                        protocol: DiscountRules.protocol, currency, baseCurrency: 'PLN', revision: 0, entries: [], pending: null, fx: null, fxError: error.message, preview: true,
+                        mapping: snapshot.products.map(product => {
+                            const id = product.id.match(/^sale_item_row_([1-9]\d*)$/)?.[1] || '';
+                            return { sourceProductId: id, orderProductId: id, originalPrice: product.price, linkedPrice: product.price };
+                        }),
+                    }, refreshFx);
+                }
+            }
+        }
         finally { loading = false; if (!closed) recalculate(); }
     }
     async function save(action) {
